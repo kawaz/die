@@ -146,18 +146,18 @@ run_case 'stdin+arg/arg-wins'           1 '' 'X'           -- "${DIE_BIN}" -- X
 # WriteFile.  Both are spec-compliant.  The -n cases must be byte-exact (cat-
 # equivalent byte-transparent output).
 
-# Run cmd, capture stderr to file, return path in $1 (nameref).
-# Usage: _run_raw_capture TMPVAR STDIN_DATA -- CMD ARGS...
+# Run cmd, capture stderr into FILE_PATH (caller-allocated tmp file).
+# Usage: _run_raw_capture FILE_PATH STDIN_DATA -- CMD ARGS...
 #   STDIN_DATA == '__NOSTDIN__' → redirect stdin from /dev/null
+# bash 3.2 compatible — no `local -n` nameref (macOS ships bash 3.2).
 _run_raw_capture() {
-    local -n _out_tmp=$1
+    local _out_tmp=$1
     local _stdin=$2
     shift 2
     if [ "${1:-}" != '--' ]; then
         echo "internal: _run_raw_capture missing --" >&2; return 2
     fi
     shift
-    _out_tmp=$(mktemp)
     if [ "${_stdin}" != '__NOSTDIN__' ]; then
         printf '%s' "${_stdin}" | "$@" 2>"${_out_tmp}" >/dev/null
     else
@@ -173,8 +173,8 @@ raw_byte_check() {
         echo "internal: raw_byte_check '${name}' missing --" >&2; return 2
     fi
     shift
-    local tmp
-    _run_raw_capture tmp "${stdin_data}" -- "$@"
+    local tmp; tmp=$(mktemp)
+    _run_raw_capture "$tmp" "${stdin_data}" -- "$@"
     local got; got=$(od -An -c "$tmp" | tr -d ' \n')
     local want; want=$(printf '%s' "${expected_stderr}" | od -An -c | tr -d ' \n')
     rm -f "$tmp"
@@ -217,8 +217,8 @@ loose_eol_check() {
         echo "internal: loose_eol_check '${name}' missing --" >&2; return 2
     fi
     shift
-    local tmp
-    _run_raw_capture tmp "${stdin_data}" -- "$@"
+    local tmp; tmp=$(mktemp)
+    _run_raw_capture "$tmp" "${stdin_data}" -- "$@"
     local ok=1
     local detail=''
     # check ends with newline
