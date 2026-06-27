@@ -1,12 +1,9 @@
-# die justfile
+# die justfile (Zig implementation, post-DR-0007 unification)
 #
-# Task runner during the parallel-implementation phase. Each impl lives
-# in its own directory (go/, rust/, mbt/, zig/) and exposes the same
-# `bin/die` artifact via per-lang recipes. The shared shell-based test
-# suite (tests/) is run against any one of them.
-#
-# bump-semver is consumed as an external CLI (= die does not dogfood
-# itself yet; that happens after a winning implementation is picked).
+# Layout: build.zig + build.zig.zon + src/ at the repo root (idiomatic Zig
+# project). The shared shell e2e suite (tests/run.sh) drives the built
+# binary; per-language unit tests live alongside src/main.zig as `test`
+# blocks, run via `zig build test`.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -21,7 +18,7 @@ default: list
 list:
     @just --list --unsorted
 
-# ---------- atomic (lint / test / build) ----------
+# ---------- atomic (lint / unit / build / e2e / ci) ----------
 
 # just --fmt (justfile self-format check)
 [private]
@@ -41,66 +38,33 @@ lint-shell:
     [ ${#files[@]} -gt 0 ] || exit 0
     shellcheck "${files[@]}"
 
-# all lints (delegates per-language lints once impls exist)
-lint: lint-just lint-shell
+# zig fmt (source format check)
+[private]
+lint-zig:
+    zig fmt --check build.zig src/
 
-# run shared shell tests against IMPL (auto-detect first built impl when empty;
-# skip with a warning if no impl has been built yet — bootstrap-friendly)
-test IMPL='':
-    @impl="$1"; \
-    if [ -z "$impl" ]; then \
-        for cand in go rust mbt zig; do \
-            if [ -x "$cand/bin/die" ]; then impl="$cand"; break; fi; \
-        done; \
-    fi; \
-    if [ -z "$impl" ]; then \
-        echo "[test] no built impl found yet — skipping (run 'just build-<lang>' first)" >&2; \
-        exit 0; \
-    fi; \
-    if [ ! -x "$impl/bin/die" ]; then \
-        echo "[test] $impl/bin/die missing — build it first" >&2; exit 1; \
-    fi; \
-    if [ ! -x tests/run.sh ]; then \
-        echo "[test] tests/run.sh not present yet — skipping" >&2; exit 0; \
-    fi; \
-    echo "running tests/ against $impl/bin/die"; \
-    DIE_BIN="$PWD/$impl/bin/die" tests/run.sh
+# all lints
+lint: lint-just lint-shell lint-zig
 
-# build every implementation that has its source tree present (skip absent ones)
+# zig unit tests (test blocks in src/main.zig)
+unit:
+    zig build test --summary all
+
+# release build → bin/die (ReleaseSmall for the smallest binary)
 build:
-    @for impl in go rust mbt zig; do \
-        if [ -d "$impl" ]; then \
-            echo "==> build-$impl"; \
-            just "build-$impl"; \
-        fi; \
-    done
+    zig build -Doptimize=ReleaseSmall
+    mkdir -p bin
+    cp zig-out/bin/die bin/die
+    ls -lh bin/die
 
-# ---------- per-language build recipes (added on demand) ----------
+# e2e tests via the shared shell suite
+test: build
+    DIE_BIN="$PWD/bin/die" tests/run.sh
 
-# go build → go/bin/die
-[private]
-build-go:
-    cd go && go build -trimpath -ldflags "-s -w -X main.version=v$(cat ../VERSION)" -o bin/die ./...
+# CI entry point: lint + unit + build + e2e
+ci: lint unit build test
 
-# cargo build → rust/bin/die (release)
-[private]
-build-rust:
-    cd rust && cargo build --release && mkdir -p bin && cp target/release/die bin/die
-
-# moon build → mbt/bin/die (native backend)
-[private]
-build-mbt:
-    cd mbt && moon build --target native --release && mkdir -p bin && cp _build/native/release/build/main/main.exe bin/die && strip -x bin/die
-
-# zig build-exe → zig/bin/die
-[private]
-build-zig:
-    cd zig && zig build -Doptimize=ReleaseSmall && mkdir -p bin && cp zig-out/bin/die bin/die
-
-# lint + build + test (CI entry point; runs whatever impl is built)
-ci: lint build test
-
-# ---------- gates (push の内部、利用者が直接叩くことほぼなし) ----------
+# ---------- gates (used by `just push`; rarely invoked directly) ----------
 
 # working copy is clean
 [private]
@@ -112,8 +76,9 @@ ensure-clean:
 check-on-default-branch:
     bump-semver vcs is on-default-branch
 
-# fail if impl/tests changed since default-branch@origin without bumping VERSION
-check-version-bumped: (_check-version-bumped "go/" "rust/" "mbt/" "zig/" "tests/")
+# fail if source / build / tests changed since default-branch@origin
+# without bumping VERSION
+check-version-bumped: (_check-version-bumped "build.zig" "build.zig.zon" "src/" "tests/")
 
 [private]
 [script]
@@ -175,12 +140,8 @@ on-success-release:
 
 # ---------- utility ----------
 
-# display VERSION + any built binary versions
+# display VERSION + built/installed binary versions
 version:
     echo "VERSION: $(cat VERSION)"
-    for impl in go rust mbt zig; do \
-        if [ -x "$impl/bin/die" ]; then \
-            echo "$impl: $($impl/bin/die --version 2>&1 || echo '(no --version)')"; \
-        fi; \
-    done
+    if [ -x ./bin/die ]; then echo "binary: $(./bin/die --version 2>&1 || echo '(no --version)')"; fi
     if command -v die >/dev/null 2>&1; then echo "installed: $(die --version 2>&1 || echo '(no --version)')"; fi

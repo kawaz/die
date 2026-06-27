@@ -95,7 +95,7 @@ When users pipe content into `die` (`cat <file | die`), the trailing LF behavior
 
 ## Distribution
 
-The implementation language is chosen via **DR-0001** (parallel implementation comparison: Go / Rust / MoonBit / Zig). Homebrew tap distribution (kawaz/tap) is planned.
+Implemented in **Zig** (DR-0007). Distributed via `brew install kawaz/tap/die`. The parallel-implementation phase (Go / Rust / MoonBit / Zig comparison per DR-0003) is preserved on the `archive/multi-impl-comparison` bookmark; see `docs/findings/2026-06-27-language-comparison.md` for the measured-data justification.
 
 ## Related
 

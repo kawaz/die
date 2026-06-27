@@ -1,6 +1,6 @@
 # DR-0003: 実装言語の並行比較方針
 
-- Status: Active
+- Status: Resolved by DR-0007 (2026-06-27)
 - Date: 2026-06-27
 
 ## Context

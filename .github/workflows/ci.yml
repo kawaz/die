@@ -1,11 +1,13 @@
 name: ci
 
-# Parallel-impl comparison CI: build each language's `die` and run the shared
-# shell e2e suite (tests/run.sh) against it. Cross-platform matrix so we can
-# observe Linux / macOS / Windows behaviour during DR-0003 evaluation.
+# Post-DR-0007 (Zig adoption) CI:
+#   - lint: zig fmt + just self-fmt + shellcheck
+#   - unit tests: zig build test (test blocks in src/main.zig)
+#   - build: ReleaseSmall → bin/die, uploaded as artifact
+#   - e2e: tests/run.sh against the built binary
 #
-# Windows runs use bash via Git for Windows (shell: bash). The tests use only
-# POSIX-shell features that Git Bash supports (printf, mktemp, od, $'...').
+# Matrix: 3 OSes (ubuntu / macos / windows). Windows runs use bash via
+# Git for Windows (shell: bash).
 
 on:
   push:
@@ -22,8 +24,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  go:
-    name: go (${{ matrix.os }})
+  zig:
+    name: zig (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -37,141 +39,17 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: stable
-          cache-dependency-path: go/go.sum
-      - name: unit tests
-        working-directory: go
-        run: go test ./...
-      - name: build
-        working-directory: go
-        run: |
-          go build -trimpath -ldflags "-s -w -X main.version=v$(cat ../VERSION)" -o bin/die ./...
-          ls -lh bin/die
-      - name: e2e tests
-        run: DIE_BIN="$PWD/go/bin/die" bash tests/run.sh
-      - name: upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: die-go-${{ matrix.os }}
-          path: go/bin/die*
-          if-no-files-found: error
-          retention-days: 7
-
-  rust:
-    name: rust (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure git autocrlf=false (windows)
-        if: runner.os == 'Windows'
-        run: git config --global core.autocrlf false
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
-      - name: unit tests
-        working-directory: rust
-        run: cargo test
-      - name: build
-        working-directory: rust
-        run: |
-          cargo build --release
-          mkdir -p bin
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp target/release/die.exe bin/die.exe
-            ls -lh bin/die.exe
-          else
-            cp target/release/die bin/die
-            ls -lh bin/die
-          fi
-      - name: e2e tests
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            DIE_BIN="$PWD/rust/bin/die.exe" bash tests/run.sh
-          else
-            DIE_BIN="$PWD/rust/bin/die" bash tests/run.sh
-          fi
-      - name: upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: die-rust-${{ matrix.os }}
-          path: rust/bin/die*
-          if-no-files-found: error
-          retention-days: 7
-
-  mbt:
-    name: mbt (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        # NOTE: Windows row added once the mbt subagent confirms native-backend
-        # Windows build is feasible.
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - name: install MoonBit
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
-      - name: unit tests
-        working-directory: mbt
-        run: moon test --target native
-      - name: build
-        working-directory: mbt
-        run: |
-          moon build --target native --release
-          mkdir -p bin
-          cp _build/native/release/build/main/main.exe bin/die
-      - name: e2e tests
-        run: DIE_BIN="$PWD/mbt/bin/die" bash tests/run.sh
-      - name: upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: die-mbt-${{ matrix.os }}
-          path: mbt/bin/die*
-          if-no-files-found: error
-          retention-days: 7
-
-  zig:
-    name: zig (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure git autocrlf=false (windows)
-        if: runner.os == 'Windows'
-        run: git config --global core.autocrlf false
       - uses: mlugg/setup-zig@v2
         with:
-          # Explicit version → setup-zig does not try to read build.zig.zon
-          # from the workflow's working-directory (which is repo root, not
-          # the zig/ subdirectory where our zon lives). Pinning the version
-          # also makes "stable Zig moves" visible as deliberate version bumps.
+          # Pin explicitly so setup-zig doesn't probe for build.zig.zon in
+          # the working directory and so stable-zig bumps surface as
+          # deliberate version-pin changes in CI.
           version: 0.16.0
+      - name: zig fmt check
+        run: zig fmt --check build.zig src/
       - name: unit tests
-        working-directory: zig
         run: zig build test --summary all
-      - name: build
-        working-directory: zig
+      - name: build (ReleaseSmall)
         run: |
           zig build -Doptimize=ReleaseSmall
           mkdir -p bin
@@ -185,14 +63,14 @@ jobs:
       - name: e2e tests
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            DIE_BIN="$PWD/zig/bin/die.exe" bash tests/run.sh
+            DIE_BIN="$PWD/bin/die.exe" bash tests/run.sh
           else
-            DIE_BIN="$PWD/zig/bin/die" bash tests/run.sh
+            DIE_BIN="$PWD/bin/die" bash tests/run.sh
           fi
       - name: upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: die-zig-${{ matrix.os }}
-          path: zig/bin/die*
+          name: die-${{ matrix.os }}
+          path: bin/die*
           if-no-files-found: error
           retention-days: 7

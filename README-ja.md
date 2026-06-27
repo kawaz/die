@@ -10,7 +10,11 @@ bash script や justfile で `cmd || die "context"` のように書ける汎用 
 
 ## インストール
 
-実装言語の検討中 (= Go / Rust / MoonBit / Zig での並行実装と比較)。homebrew tap 配布を想定。
+```sh
+brew install kawaz/tap/die
+```
+
+実装は Zig (採用理由は [DR-0007](./docs/decisions/DR-0007-adopt-zig-archive-others.md) を参照)。
 
 ## 使い方
 

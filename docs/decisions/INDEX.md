@@ -7,6 +7,7 @@
 - [DR-0003-parallel-implementation-language](./DR-0003-parallel-implementation-language.md) — 実装言語の並行比較方針
 - [DR-0005-drop-eol-option-respect-os-textmode](./DR-0005-drop-eol-option-respect-os-textmode.md) — --eol 廃止、OS text-mode 慣習に従う (Windows は CRT が \n→\r\n 自動変換)
 - [DR-0006-n-is-cat-equivalent-default-is-cursor-safe](./DR-0006-n-is-cat-equivalent-default-is-cursor-safe.md) — `-n` は cat 同等 byte 透過 / default は「カーソル崩れない」だけ (refines DR-0002 / DR-0005)
+- [DR-0007-adopt-zig-archive-others](./DR-0007-adopt-zig-archive-others.md) — Zig 採用、他言語実装は archive bookmark に保存 (closes DR-0003)
 
 ## Archived
 

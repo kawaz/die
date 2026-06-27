@@ -10,7 +10,11 @@ Provide a generic `die` for shell scripts and justfiles (`cmd || die "context"`)
 
 ## Installation
 
-Implementation language still under evaluation (= parallel implementations in Go / Rust / MoonBit / Zig will be compared). Homebrew tap distribution is planned.
+```sh
+brew install kawaz/tap/die
+```
+
+Implemented in Zig (see [DR-0007](./docs/decisions/DR-0007-adopt-zig-archive-others.md) for the rationale).
 
 ## Usage
 

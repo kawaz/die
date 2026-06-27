@@ -137,7 +137,7 @@ run_case 'stdin/empty-becomes-lf'       1 '' ''            -- "${DIE_BIN}"
 # over it with a soft assertion (see [[test-failure-no-tampering]]).
 case "${OSTYPE:-}" in
     msys*|cygwin*|win32*)
-        echo "  SKIP  stdin/crlf-treated-as-lf  (Git Bash pipe strips \\r before child stdin)"
+        printf '  SKIP  stdin/crlf-treated-as-lf  (Git Bash pipe strips \\r before child stdin)\n'
         ;;
     *)
         STDIN_DATA=$'X\r\n'
