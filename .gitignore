@@ -1,6 +1,11 @@
 .DS_Store
-/bin/
-/dist/
+.cache/
+
+# Build outputs per-language (each impl writes its binary to <impl>/bin/die).
+**/bin/
+**/dist/
+**/target/         # rust, mbt
+**/zig-cache/
+**/zig-out/
 *.test
 *.out
-.cache/
