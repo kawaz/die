@@ -164,26 +164,55 @@ run_case 'stdin+arg/arg-wins'           1 '' 'X'           -- "${DIE_BIN}" -- X
 #                       string is hard to write (e.g. preserved-empty-line),
 #                       but expect_die_output is preferred where possible.
 
-# Run cmd, capture stderr into FILE_PATH (caller-allocated tmp file).
-# Usage: _run_raw_capture FILE_PATH STDIN_DATA -- CMD ARGS...
+# Run cmd, capture stderr into STDERR_FILE and stdout into STDOUT_FILE
+# (both caller-allocated tmp files); the global LAST_EXIT holds the exit
+# code. bash 3.2 compatible — no `local -n` nameref (macOS ships bash 3.2).
+#
+# Usage: _run_raw_capture STDERR_FILE STDOUT_FILE STDIN_DATA -- CMD ARGS...
 #   STDIN_DATA == '__NOSTDIN__' → redirect stdin from /dev/null
-# bash 3.2 compatible — no `local -n` nameref (macOS ships bash 3.2).
+LAST_EXIT=
 _run_raw_capture() {
-    local _out_tmp=$1
-    local _stdin=$2
-    shift 2
+    local _err_tmp=$1
+    local _out_tmp=$2
+    local _stdin=$3
+    shift 3
     if [ "${1:-}" != '--' ]; then
         echo "internal: _run_raw_capture missing --" >&2; return 2
     fi
     shift
     if [ "${_stdin}" != '__NOSTDIN__' ]; then
-        printf '%s' "${_stdin}" | "$@" 2>"${_out_tmp}" >/dev/null
+        printf '%s' "${_stdin}" | "$@" >"${_out_tmp}" 2>"${_err_tmp}"
     else
-        "$@" </dev/null 2>"${_out_tmp}" >/dev/null
+        "$@" </dev/null >"${_out_tmp}" 2>"${_err_tmp}"
     fi
+    LAST_EXIT=$?
 }
 
-# strict byte match — for -n cases
+# _check_invariants STDOUT_FILE → 0 if stdout empty AND LAST_EXIT == 1, else 1
+# Prints failure detail on stderr.
+# These invariants come from DR-0001:
+#   - exit code: always 1
+#   - stdout:    always empty (output goes to stderr)
+_check_invariants() {
+    local _out_tmp=$1
+    local _detail=''
+    local _ok=1
+    if [ "${LAST_EXIT}" != "1" ]; then
+        _ok=0
+        _detail+=" [exit=${LAST_EXIT}, want 1]"
+    fi
+    local _out_size; _out_size=$(wc -c <"$_out_tmp" | tr -d ' ')
+    if [ "${_out_size}" != "0" ]; then
+        _ok=0
+        _detail+=" [stdout non-empty: ${_out_size} bytes]"
+    fi
+    INVARIANT_DETAIL=$_detail
+    return $((1 - _ok))
+}
+INVARIANT_DETAIL=
+
+# strict byte match — for -n cases (cat-equivalent)
+# Always asserts the invariants too (exit=1 + stdout empty).
 raw_byte_check() {
     local name=$1 stdin_data=$2 expected_stderr=$3
     shift 3
@@ -191,78 +220,30 @@ raw_byte_check() {
         echo "internal: raw_byte_check '${name}' missing --" >&2; return 2
     fi
     shift
-    local tmp; tmp=$(mktemp)
-    _run_raw_capture "$tmp" "${stdin_data}" -- "$@"
-    local got; got=$(od -An -c "$tmp" | tr -d ' \n')
+    local err_tmp; err_tmp=$(mktemp)
+    local out_tmp; out_tmp=$(mktemp)
+    _run_raw_capture "$err_tmp" "$out_tmp" "${stdin_data}" -- "$@"
+    local got; got=$(od -An -c "$err_tmp" | tr -d ' \n')
     local want; want=$(printf '%s' "${expected_stderr}" | od -An -c | tr -d ' \n')
-    rm -f "$tmp"
-    if [ "${got}" = "${want}" ]; then
+    local invariant_ok=1
+    _check_invariants "$out_tmp" || invariant_ok=0
+    rm -f "$err_tmp" "$out_tmp"
+    if [ "${got}" = "${want}" ] && [ "${invariant_ok}" = "1" ]; then
         pass=$((pass + 1))
         printf '  PASS  raw/%s\n' "${name}"
     else
         fail=$((fail + 1))
         failures+=("raw/${name}")
-        printf '  FAIL  raw/%s\n' "${name}"
-        printf '        stderr bytes want=%s\n' "${want}"
-        printf '        stderr bytes got =%s\n' "${got}"
-    fi
-}
-
-# ends_with_newline FILE — true if last byte is \x0a OR last two bytes are \x0d\x0a
-ends_with_newline() {
-    local f=$1
-    local sz; sz=$(wc -c <"$f" | tr -d ' ')
-    [ "${sz}" -eq 0 ] && return 1
-    # check last byte
-    local last; last=$(tail -c 1 "$f" | od -An -tx1 | tr -d ' \n')
-    [ "${last}" = "0a" ] && return 0
-    # check last two bytes for \r\n
-    if [ "${sz}" -ge 2 ]; then
-        local last2; last2=$(tail -c 2 "$f" | od -An -tx1 | tr -d ' \n')
-        [ "${last2}" = "0d0a" ] && return 0
-    fi
-    return 1
-}
-
-# loose EOL check — for default cases (DR-0006: cursor-safe = ends with \n or \r\n)
-# Usage: loose_eol_check NAME STDIN_DATA EXPECTED_PREFIX -- CMD ARGS...
-#   EXPECTED_PREFIX: the output must start with these bytes (prefix match).
-#   Pass '' to skip prefix check.
-loose_eol_check() {
-    local name=$1 stdin_data=$2 expected_prefix=$3
-    shift 3
-    if [ "${1:-}" != '--' ]; then
-        echo "internal: loose_eol_check '${name}' missing --" >&2; return 2
-    fi
-    shift
-    local tmp; tmp=$(mktemp)
-    _run_raw_capture "$tmp" "${stdin_data}" -- "$@"
-    local ok=1
-    local detail=''
-    # check ends with newline
-    if ! ends_with_newline "$tmp"; then
-        ok=0
-        detail+=' [not ending with \\n or \\r\\n]'
-    fi
-    # check prefix if given
-    if [ -n "${expected_prefix}" ]; then
-        local prefix_len=${#expected_prefix}
-        local got_prefix; got_prefix=$(head -c "${prefix_len}" "$tmp")
-        if [ "${got_prefix}" != "${expected_prefix}" ]; then
-            ok=0
-            detail+=" [prefix mismatch: want=$(printf '%s' "${expected_prefix}" | od -An -c | tr -d ' \n') got=$(printf '%s' "${got_prefix}" | od -An -c | tr -d ' \n')]"
+        printf '  FAIL  raw/%s%s\n' "${name}" "${INVARIANT_DETAIL}"
+        if [ "${got}" != "${want}" ]; then
+            printf '        stderr bytes want=%s\n' "${want}"
+            printf '        stderr bytes got =%s\n' "${got}"
         fi
     fi
-    rm -f "$tmp"
-    if [ "${ok}" = "1" ]; then
-        pass=$((pass + 1))
-        printf '  PASS  raw/%s\n' "${name}"
-    else
-        fail=$((fail + 1))
-        failures+=("raw/${name}")
-        printf '  FAIL  raw/%s%s\n' "${name}" "${detail}"
-    fi
 }
+
+# (loose_eol_check removed — expect_die_output covers its use cases with
+# stricter byte-string assertion.)
 
 # expect_die_output NAME STDIN_DATA EXPECTED_DIE_BYTES -- CMD ARGS...
 #
@@ -299,22 +280,31 @@ expect_die_output() {
         echo "internal: expect_die_output '${name}' missing --" >&2; return 2
     fi
     shift
-    local tmp; tmp=$(mktemp)
-    _run_raw_capture "$tmp" "${stdin_data}" -- "$@"
-    local got; got=$(od -An -c "$tmp" | tr -d ' \n')
+    local err_tmp; err_tmp=$(mktemp)
+    local out_tmp; out_tmp=$(mktemp)
+    _run_raw_capture "$err_tmp" "$out_tmp" "${stdin_data}" -- "$@"
+    local got; got=$(od -An -c "$err_tmp" | tr -d ' \n')
     local want_native; want_native=$(printf '%s' "${expected_die}" | od -An -c | tr -d ' \n')
     local want_crt; want_crt=$(crt_expand "${expected_die}" | od -An -c | tr -d ' \n')
-    rm -f "$tmp"
+    local invariant_ok=1
+    _check_invariants "$out_tmp" || invariant_ok=0
+    rm -f "$err_tmp" "$out_tmp"
+    local byte_ok=0
     if [ "${got}" = "${want_native}" ] || [ "${got}" = "${want_crt}" ]; then
+        byte_ok=1
+    fi
+    if [ "${byte_ok}" = "1" ] && [ "${invariant_ok}" = "1" ]; then
         pass=$((pass + 1))
         printf '  PASS  raw/%s\n' "${name}"
     else
         fail=$((fail + 1))
         failures+=("raw/${name}")
-        printf '  FAIL  raw/%s\n' "${name}"
-        printf '        observed bytes  = %s\n' "${got}"
-        printf '        expected (die)  = %s\n' "${want_native}"
-        printf '        expected (CRT)  = %s\n' "${want_crt}"
+        printf '  FAIL  raw/%s%s\n' "${name}" "${INVARIANT_DETAIL}"
+        if [ "${byte_ok}" = "0" ]; then
+            printf '        observed bytes  = %s\n' "${got}"
+            printf '        expected (die)  = %s\n' "${want_native}"
+            printf '        expected (CRT)  = %s\n' "${want_crt}"
+        fi
     fi
 }
 
