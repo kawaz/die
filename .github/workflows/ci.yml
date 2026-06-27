@@ -48,8 +48,6 @@ jobs:
           ls -lh bin/die
       - name: e2e tests
         run: DIE_BIN="$PWD/go/bin/die" bash tests/run.sh
-      - name: eol probe (observation only, never fails)
-        run: bash tests/eol-probe.sh "$PWD/go/bin/die" || true
       - name: upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -96,13 +94,6 @@ jobs:
           else
             DIE_BIN="$PWD/rust/bin/die" bash tests/run.sh
           fi
-      - name: eol probe (observation only, never fails)
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            bash tests/eol-probe.sh "$PWD/rust/bin/die.exe" || true
-          else
-            bash tests/eol-probe.sh "$PWD/rust/bin/die" || true
-          fi
       - name: upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -137,8 +128,6 @@ jobs:
           cp _build/native/release/build/main/main.exe bin/die
       - name: e2e tests
         run: DIE_BIN="$PWD/mbt/bin/die" bash tests/run.sh
-      - name: eol probe (observation only, never fails)
-        run: bash tests/eol-probe.sh "$PWD/mbt/bin/die" || true
       - name: upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -187,13 +176,6 @@ jobs:
             DIE_BIN="$PWD/zig/bin/die.exe" bash tests/run.sh
           else
             DIE_BIN="$PWD/zig/bin/die" bash tests/run.sh
-          fi
-      - name: eol probe (observation only, never fails)
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            bash tests/eol-probe.sh "$PWD/zig/bin/die.exe" || true
-          else
-            bash tests/eol-probe.sh "$PWD/zig/bin/die" || true
           fi
       - name: upload binary
         uses: actions/upload-artifact@v4

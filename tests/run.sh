@@ -134,17 +134,35 @@ run_case 'stdin+arg/arg-wins'           1 '' 'X'           -- "${DIE_BIN}" -- X
 # (covered implicitly by the cases above — every expect_out is '' and every
 # expect_exit is 1)
 
-# ---------- raw-byte LF assertions (run_case strips trailing LF via $()) ----------
+# ---------- raw-byte assertions ----------
 #
-# Two check functions:
-#   raw_byte_check  — strict byte equality; used for -n cases (cat-equivalent, DR-0006)
-#   loose_eol_check — only asserts the output starts with a given prefix and ends
-#                     with \n or \r\n; used for default cases (cursor-safe, DR-0006)
+# Model (DR-0002, DR-0005, DR-0006):
+#   * `die` writes a deterministic byte string to stderr — this is the
+#     "die-controlled byte string", computed from input + spec rules:
+#       - ARG path: trim each ARG (ASCII whitespace only), join with --sep,
+#         append \n if the result does not already end with \n.
+#       - stdin path: forward stdin as-is, append \n if the input does not
+#         already end with \n.
+#       - With -n: never append, write exactly what would be joined / forwarded.
+#   * The actual bytes observed on stderr may differ from the die-controlled
+#     string for one reason only: the host C runtime's text-mode layer can
+#     expand \n to \r\n on output (Windows MSVCRT _write). This only happens
+#     for impls that go through MSVCRT (Zig today). Go and Rust use WriteFile
+#     directly and bypass the conversion. Under -n, all impls call
+#     _setmode(_O_BINARY) on stdin/stderr to suppress this — so -n is always
+#     byte-exact.
 #
-# DR-0006: default mode only requires "cursor-safe" (ends with \n or \r\n).
-# Zig/MoonBit on Windows emit \r\n via CRT text-mode; Go/Rust emit \n via
-# WriteFile.  Both are spec-compliant.  The -n cases must be byte-exact (cat-
-# equivalent byte-transparent output).
+# Check functions:
+#   raw_byte_check    — strict byte equality (used for -n cases; cat-equivalent).
+#   expect_die_output — die-controlled bytes must match exactly OR match after
+#                       \n → \r\n expansion (Windows MSVCRT text-mode result).
+#                       Used for default cases. Encodes the spec: kawaz wants
+#                       "the right bytes leaving die, plus the runtime's natural
+#                       text-mode behaviour, nothing more".
+#   loose_eol_check   — legacy: only asserts a prefix + ends with \n or \r\n.
+#                       Kept for cases where the full die-controlled byte
+#                       string is hard to write (e.g. preserved-empty-line),
+#                       but expect_die_output is preferred where possible.
 
 # Run cmd, capture stderr into FILE_PATH (caller-allocated tmp file).
 # Usage: _run_raw_capture FILE_PATH STDIN_DATA -- CMD ARGS...
@@ -246,18 +264,79 @@ loose_eol_check() {
     fi
 }
 
-# DR-0006 split:
-#   default cases (no -n): loose_eol_check — only assert "ends with \n or \r\n"
-#   -n cases:              raw_byte_check  — strict byte equality (cat-equivalent)
-loose_eol_check 'arg/lf-appended'       '__NOSTDIN__' 'msg'   -- "${DIE_BIN}" -- 'msg'
-loose_eol_check 'arg/lf-not-duplicated' '__NOSTDIN__' 'msg'   -- "${DIE_BIN}" -- $'msg\n'
-loose_eol_check 'stdin/lf-appended'     'X'           'X'     -- "${DIE_BIN}"
-raw_byte_check  'stdin/-n-no-lf'        'X'           'X'              -- "${DIE_BIN}" -n
-loose_eol_check 'stdin/empty-default'   ''            ''      -- "${DIE_BIN}"
-raw_byte_check  'stdin/empty-n-empty'   ''            ''               -- "${DIE_BIN}" -n
-# stdin/double-lf: input X\n\n preserves both trailing LFs; on Windows CRT
-# may convert to X\r\n\r\n.  Loose check: starts with "X" and ends with \n or \r\n.
-loose_eol_check 'stdin/double-lf'       $'X\n\n'      'X'     -- "${DIE_BIN}"
+# expect_die_output NAME STDIN_DATA EXPECTED_DIE_BYTES -- CMD ARGS...
+#
+# Asserts the observed stderr equals either:
+#   (a) EXPECTED_DIE_BYTES exactly                 — no CRT text-mode expansion
+#   (b) EXPECTED_DIE_BYTES with every isolated \n  — MSVCRT text-mode expansion
+#       expanded to \r\n (a \n preceded             active (Windows; only Zig today)
+#       by \r is left alone)
+#
+# Either is spec-compliant per DR-0005 / DR-0006: die only commits to the
+# die-controlled byte string; the host runtime's text-mode layer may expand
+# \n to \r\n on Windows, and that is allowed.
+expect_die_output() {
+    local name=$1 stdin_data=$2 expected_die=$3
+    shift 3
+    if [ "${1:-}" != '--' ]; then
+        echo "internal: expect_die_output '${name}' missing --" >&2; return 2
+    fi
+    shift
+    local tmp; tmp=$(mktemp)
+    _run_raw_capture "$tmp" "${stdin_data}" -- "$@"
+    local got; got=$(od -An -c "$tmp" | tr -d ' \n')
+    local want_native; want_native=$(printf '%s' "${expected_die}" | od -An -c | tr -d ' \n')
+    # Compute the "CRT-expanded" variant: every \n NOT preceded by \r becomes \r\n.
+    # bash 3.2-compatible sed: do the transform on the raw bytes.
+    local want_crt
+    want_crt=$(printf '%s' "${expected_die}" \
+        | sed $'s/\\([^\r]\\)\n/\\1\r\n/g; s/^\n/\r\n/' \
+        | od -An -c | tr -d ' \n')
+    rm -f "$tmp"
+    if [ "${got}" = "${want_native}" ] || [ "${got}" = "${want_crt}" ]; then
+        pass=$((pass + 1))
+        printf '  PASS  raw/%s\n' "${name}"
+    else
+        fail=$((fail + 1))
+        failures+=("raw/${name}")
+        printf '  FAIL  raw/%s\n' "${name}"
+        printf '        observed bytes  = %s\n' "${got}"
+        printf '        expected (die)  = %s\n' "${want_native}"
+        printf '        expected (CRT)  = %s\n' "${want_crt}"
+    fi
+}
+
+# ---- Default-mode cases (no -n) — die-controlled byte string fully specified ----
+#
+# Spec: ARG path applies --trim each (default), which strips ASCII whitespace
+# (SP HT LF VT FF CR) from each ARG; the result is joined with --sep (" " default)
+# and \n is appended if missing. stdin path forwards as-is and appends \n if
+# missing. Observed stderr may have \n → \r\n expansion (Windows MSVCRT).
+
+# ARG path:
+expect_die_output 'arg/single'                    '__NOSTDIN__' $'msg\n'     -- "${DIE_BIN}" -- 'msg'
+expect_die_output 'arg/preserves-internal-cr'     '__NOSTDIN__' $'a\rb\n'    -- "${DIE_BIN}" -- $'a\rb'
+expect_die_output 'arg/trim-strips-lf-tail'       '__NOSTDIN__' $'msg\n'     -- "${DIE_BIN}" -- $'msg\n'
+expect_die_output 'arg/trim-strips-crlf-tail'     '__NOSTDIN__' $'msg\n'     -- "${DIE_BIN}" -- $'msg\r\n'
+expect_die_output 'arg/trim-strips-cr-tail'       '__NOSTDIN__' $'msg\n'     -- "${DIE_BIN}" -- $'msg\r'
+expect_die_output 'arg/trim-strips-double-lf'     '__NOSTDIN__' $'msg\n'     -- "${DIE_BIN}" -- $'msg\n\n'
+expect_die_output 'arg/trim-none-keeps-tail'      '__NOSTDIN__' $'msg\r\n'   -- "${DIE_BIN}" --trim none -- $'msg\r\n'
+
+# stdin path (no trim):
+expect_die_output 'stdin/no-lf-then-append'       'X'           $'X\n'       -- "${DIE_BIN}"
+expect_die_output 'stdin/lf-tail-no-append'       $'X\n'        $'X\n'       -- "${DIE_BIN}"
+expect_die_output 'stdin/crlf-tail-no-append'     $'X\r\n'      $'X\r\n'     -- "${DIE_BIN}"
+expect_die_output 'stdin/cr-tail-gets-append'     $'X\r'        $'X\r\n'     -- "${DIE_BIN}"
+expect_die_output 'stdin/double-lf-preserved'     $'X\n\n'      $'X\n\n'     -- "${DIE_BIN}"
+expect_die_output 'stdin/empty-becomes-lf-raw'    ''            $'\n'        -- "${DIE_BIN}"
+
+# ---- -n cases — cat-equivalent, strict byte match (no CRT expansion under -n) ----
+raw_byte_check  'stdin/-n-no-lf'                  'X'           'X'          -- "${DIE_BIN}" -n
+raw_byte_check  'stdin/-n-keeps-lf'               $'X\n'        $'X\n'       -- "${DIE_BIN}" -n
+raw_byte_check  'stdin/-n-keeps-crlf'             $'X\r\n'      $'X\r\n'     -- "${DIE_BIN}" -n
+raw_byte_check  'stdin/-n-keeps-cr'               $'X\r'        $'X\r'       -- "${DIE_BIN}" -n
+raw_byte_check  'stdin/-n-keeps-double-lf'        $'X\n\n'      $'X\n\n'     -- "${DIE_BIN}" -n
+raw_byte_check  'stdin/-n-empty-stays-empty'      ''            ''           -- "${DIE_BIN}" -n
 
 # ---------- error / usage ----------
 # Error message text is implementation-detail. We only assert: exit=1, stdout
