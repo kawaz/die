@@ -102,11 +102,55 @@ DR-0001 の Decision に追記、各実装も `unicode.IsSpace` 系から ASCII 
 
 注意: ARG path で `--trim each` (default) は `\r\n` 終端を strip するので「`--eol crlf` で既存 LF 終端への dup 不発」の検証には `--trim none` 経由が必要。test 内コメントに明記。
 
+## 追記 (午後 2): 専門家レビュー + DR-0005 で --eol 廃止
+
+### 専門家レビュー (Workflow 並列実行)
+
+各言語 (Go / Rust / MoonBit / Zig) に対し、最適化 / 起動速度 / binary size の専門家視点を Sonnet 4 並列でレビュー → 5 番目の subagent で cross-language ROI 統合。結果は `docs/findings/2026-06-27-review-{go,rust,mbt,zig}.md` と `2026-06-27-optimisation-synthesis.md` に保存。
+
+ROI ランク:
+1. **Go: `fmt` 排除** (~200 KB / -11%)
+2. **Rust: `writeln!` 排除** (推定 15-44 KB だが LTO で既に消えてた → 実測 -16 bytes)
+3. **MoonBit: `strip -x` post-build** (-30 KB / -9%)
+4. **Zig: `defer deinit()` 削除 + `comptime` 化** (sub-ms cold-start)
+
+### kawaz の発言で方針変更 → DR-0005 起票
+
+CI Windows fail (= `\n` 期待で `\r\n` 来る) の議論で、kawaz が:
+
+> Windows native CLI は CRT の text-mode が `\n` → `\r\n` 自動変換する世界が常識で、CLI 側がそれに乗っかるのが慣習。`-n` だけ byte 透過させたいだけなら `--eol` option 自体は不要。
+> そもそも die はバイト透過至上ではない。表示ツール。`-n` が pipe でオプトインも同じ判断。
+
+これを受けて **DR-0005 起票 + DR-0004 を Superseded**:
+- `--eol auto/lf/crlf` 廃止 (DR-0004)
+- die の哲学を「**表示ツール、byte 透過至上ではない**」と明示 (= memory にも `project_die_philosophy.md` で保存)
+- `-n` は補完抑止オプトインのみ。Windows でも CRT text-mode 変換は許容 (= `_setmode binary` 呼ばない)
+- tests/run.sh: OSTYPE 分岐で Windows 期待値を CRLF に
+- 各実装: `--eol` parser / `_setmode` 完全削除、MoonBit の getenv / stub.c も削除
+
+### 並列 Workflow が一度仕様勘違いで stop された経緯
+
+最初の DR-0005 v1 では「**`-n` の意味 = byte 透過 (OS 跨ぎ)、Windows でも `_setmode binary` を `-n` 時だけ呼ぶ**」と書いていた。Workflow 起動した直後に kawaz から「`-n` が pipe でオプトインも同じ判断 = byte 透過じゃない」と訂正、`TaskStop` で kill → DR-0005 v2 に書き直し → Workflow 再起動。`_setmode` は **完全廃止** (= -n 時にも呼ばない) に変更。
+
+### MoonBit subagent の OS 検出調査
+
+MoonBit native backend に `--target` の host OS 分岐 (compile-time) はないと結論。kawaz は「build-target に逃がせるはず」と示唆していたが subagent は反証する根拠を提示できず。kawaz の指示で **解雇** (= 再調査せず、DR-0005 で runtime OS detection 自体が不要になったので moot)。
+
+### 最終 binary size まとめ
+
+| Lang | 初版 | 最終 (DR-0005 + opt) | 削減 |
+|---|---|---|---|
+| Go | 1.6 MB | **1.47 MB** | -13% |
+| Rust | 296 KB | 296 KB | ~0 (LTO で既に optimal) |
+| MoonBit | 322 KB | **282 KB** | -12% |
+| Zig | 50 KB | 50 KB | ~0 (near-optimal 維持) |
+
+全 4 言語 27/27 host pass。Push 済 (eebd3ad)、CI 確認中。
+
 ## 次の TODO
 
-- [ ] Workflow (MoonBit / Zig) 完了待ち → 結果統合 commit + push
-- [ ] 再 push 後の CI 確認 (= Windows 含む全 cell green を期待)
-- [ ] 4 実装出揃ったら採用言語決定 (kawaz の主観評価 + dogfood 経過)
+- [ ] 再 push 後の CI 確認 (= Windows 含む全 cell green を期待、`raw_byte_check` の OSTYPE 分岐で Windows native 挙動と整合)
+- [ ] 4 実装出揃って最適化完了 → 採用言語決定 (kawaz の主観評価 + dogfood 経過)
 - [ ] release.yml + homebrew tap formula (= 採用後、無駄打ち回避)
 - [ ] dogfood (= 他リポの justfile / shell script で die を使う)
 - [ ] 不採用言語の実装を削除 (= 1 binary に絞る、DR-0003 方針)
