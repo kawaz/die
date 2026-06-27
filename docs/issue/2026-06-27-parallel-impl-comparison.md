@@ -3,7 +3,7 @@ title: 並行実装 + 比較検討 (Go / Rust / MoonBit / Zig)
 status: open
 category: task
 created: 2026-06-27T11:19:13+09:00
-last_read:
+last_read: 2026-06-27T12:25:33+09:00
 open_entered: 2026-06-27T11:19:13+09:00
 wip_entered:
 blocked_entered:
