@@ -1,0 +1,181 @@
+name: ci
+
+# Parallel-impl comparison CI: build each language's `die` and run the shared
+# shell e2e suite (tests/run.sh) against it. Cross-platform matrix so we can
+# observe Linux / macOS / Windows behaviour during DR-0003 evaluation.
+#
+# Windows runs use bash via Git for Windows (shell: bash). The tests use only
+# POSIX-shell features that Git Bash supports (printf, mktemp, od, $'...').
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Disable CRLF rewriting on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: go/go.sum
+      - name: build
+        working-directory: go
+        run: |
+          go build -trimpath -ldflags "-s -w -X main.version=v$(cat ../VERSION)" -o bin/die ./...
+          ls -lh bin/die
+      - name: e2e tests
+        run: DIE_BIN="$PWD/go/bin/die" bash tests/run.sh
+      - name: upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: die-go-${{ matrix.os }}
+          path: go/bin/die*
+          if-no-files-found: error
+          retention-days: 7
+
+  rust:
+    name: rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure git autocrlf=false (windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: build
+        working-directory: rust
+        run: |
+          cargo build --release
+          mkdir -p bin
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/die.exe bin/die.exe
+            ls -lh bin/die.exe
+          else
+            cp target/release/die bin/die
+            ls -lh bin/die
+          fi
+      - name: e2e tests
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            DIE_BIN="$PWD/rust/bin/die.exe" bash tests/run.sh
+          else
+            DIE_BIN="$PWD/rust/bin/die" bash tests/run.sh
+          fi
+      - name: upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: die-rust-${{ matrix.os }}
+          path: rust/bin/die*
+          if-no-files-found: error
+          retention-days: 7
+
+  mbt:
+    name: mbt (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # NOTE: Windows row added once the mbt subagent confirms native-backend
+        # Windows build is feasible.
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: build
+        working-directory: mbt
+        run: |
+          moon build --target native --release
+          mkdir -p bin
+          # Path is finalised by the mbt subagent; this echo helps diagnose.
+          find . -name 'main.exe' -o -name 'die' | head
+      - name: e2e tests
+        run: DIE_BIN="$PWD/mbt/bin/die" bash tests/run.sh
+      - name: upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: die-mbt-${{ matrix.os }}
+          path: mbt/bin/die*
+          if-no-files-found: error
+          retention-days: 7
+
+  zig:
+    name: zig (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure git autocrlf=false (windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: mlugg/setup-zig@v2
+      - name: build
+        working-directory: zig
+        run: |
+          zig build -Doptimize=ReleaseSmall
+          mkdir -p bin
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp zig-out/bin/die.exe bin/die.exe
+            ls -lh bin/die.exe
+          else
+            cp zig-out/bin/die bin/die
+            ls -lh bin/die
+          fi
+      - name: e2e tests
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            DIE_BIN="$PWD/zig/bin/die.exe" bash tests/run.sh
+          else
+            DIE_BIN="$PWD/zig/bin/die" bash tests/run.sh
+          fi
+      - name: upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: die-zig-${{ matrix.os }}
+          path: zig/bin/die*
+          if-no-files-found: error
+          retention-days: 7
