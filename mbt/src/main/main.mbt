@@ -25,11 +25,10 @@ extern "c" fn c_read_into(fd : Int, buf : FixedArray[Byte], count : Int) -> Int 
 /// isatty(fd): returns 1 if fd refers to a terminal, 0 otherwise.
 extern "c" fn c_isatty(fd : Int) -> Int = "isatty"
 
-/// getenv: look up an environment variable by name.
-/// Returns null pointer (0) if not set, non-zero pointer if set.
-/// We use this for OS detection on Windows (OSTYPE / OS env var).
-#borrow(name)
-extern "c" fn c_getenv(name : Bytes) -> Int = "getenv"
+/// die_is_windows_runtime: returns 1 if running on Windows NT, 0 otherwise.
+/// Implemented in stub.c to avoid MoonBit codegen emitting a conflicting
+/// declaration for getenv() that collides with stdlib.h on glibc/gcc.
+extern "c" fn die_is_windows_runtime() -> Int = "die_is_windows_runtime"
 
 /// _setmode: set file descriptor translation mode (Windows only).
 /// fd: 0=stdin, 2=stderr. mode: _O_BINARY=0x8000.
@@ -79,17 +78,10 @@ let help_text : String =
 /// --eol auto says "build-time target" per DR-0004. On native compilation
 /// (= the typical case) build target == runtime OS, so this is correct.
 fn is_windows_host() -> Bool {
-  // We pass a null-terminated C string for "OS"
-  let key = Bytes::from_array([b'O', b'S', b'\x00'])
-  // getenv returns 0 (NULL) if not set, non-zero pointer if set.
-  // We only need to know if it's non-null for the presence check; but to
-  // distinguish "Windows_NT" from other values we'd need to read the pointer.
-  // MoonBit's FFI cannot easily dereference a C char*. Instead we use a
-  // small trick: check OSTYPE (bash sets it) or fall back.
-  // Practical approach: on Windows, GetEnvironmentVariable("OS") != NULL
-  // and equals "Windows_NT". We check presence via getenv != 0.
-  // On macOS/Linux "OS" is typically unset, so getenv returns 0.
-  c_getenv(key) != 0
+  // Delegate to stub.c helper which calls getenv("OS") and strcmp("Windows_NT").
+  // Using a C helper avoids MoonBit codegen emitting a conflicting declaration
+  // for getenv() that collides with stdlib.h's char* signature on glibc/gcc.
+  die_is_windows_runtime() != 0
 }
 
 // ---------------------------------------------------------------------------
