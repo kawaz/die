@@ -37,9 +37,9 @@
 
 **現時点の暫定推奨**: **Rust** (= stable API + Windows 対応容易 + 充分小さい binary)。Zig は将来の有力候補だが 0.16.0 の breaking change が決定的に大きい。kawaz の最終判断待ち。
 
-### Windows サポート (DR-0004 起票分)
+### Windows サポート (DR-0004 → DR-0005 で方針変更)
 
-`--eol auto|lf|crlf` の追加で Windows ターミナル崩れを default で防ぐ。実装後、Windows 上の CI matrix (= `.github/workflows/ci.yml`) で再検証。
+DR-0004 で導入した `--eol auto|lf|crlf` は DR-0005 (2026-06-27) で廃止。Windows CRT の text-mode が `\n` → `\r\n` を自動変換する OS 慣習に乗ることで `--eol` option 自体が不要と判断。各実装から `--eol` parser / Windows `_setmode` 呼び出しが削除され、tests/run.sh の `raw_byte_check` が OSTYPE 分岐で Windows 側の期待値を CRLF に切替える形に簡素化された。詳細は [DR-0005](../decisions/DR-0005-drop-eol-option-respect-os-textmode.md) を参照。
 
 ## 検証の詳細
 
