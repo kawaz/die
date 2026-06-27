@@ -2,10 +2,14 @@
 .cache/
 
 # Build outputs per-language (each impl writes its binary to <impl>/bin/die).
+# Inline comments are not supported in .gitignore — keep these on their own line.
 **/bin/
 **/dist/
-**/target/         # rust, mbt
+**/target/
 **/zig-cache/
 **/zig-out/
+
+# Cargo: also exclude lockfile from binary-crate workspaces? we keep it
+# (Cargo.lock is recommended for binary crates).
 *.test
 *.out
