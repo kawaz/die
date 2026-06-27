@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+#
+# Shared behavioural test suite for `die`. Invoke with DIE_BIN pointing to a
+# built binary:
+#
+#   DIE_BIN=/path/to/go/bin/die tests/run.sh
+#
+# Exits 0 if every case passes, 1 otherwise.
+set -uo pipefail
+
+DIE_BIN="${DIE_BIN:-${1:-}}"
+if [ -z "${DIE_BIN}" ]; then
+    echo "usage: DIE_BIN=<path-to-die> $0   (or: $0 <path-to-die>)" >&2
+    exit 2
+fi
+if [ ! -x "${DIE_BIN}" ]; then
+    echo "DIE_BIN '${DIE_BIN}' is not executable" >&2
+    exit 2
+fi
+
+pass=0
+fail=0
+failures=()
+
+# Run one test case and compare actual vs expected for: exit code, stdout, stderr.
+# Usage: run_case NAME EXPECTED_EXIT EXPECTED_STDOUT EXPECTED_STDERR -- CMD ARGS...
+#
+# If STDIN_DATA env is set, it is piped into the command; otherwise stdin is
+# /dev/null. Use STDIN_DATA='' for "empty pipe", unset (with `unset STDIN_DATA`)
+# for "no pipe at all (= /dev/null)".
+run_case() {
+    local name=$1 expect_exit=$2 expect_out=$3 expect_err=$4
+    shift 4
+    if [ "${1:-}" != "--" ]; then
+        echo "internal: run_case '${name}' missing -- separator" >&2
+        return 2
+    fi
+    shift
+
+    local actual_out actual_err actual_exit
+    local tmp_out tmp_err
+    tmp_out=$(mktemp) tmp_err=$(mktemp)
+
+    if [ "${STDIN_DATA+set}" = "set" ]; then
+        printf '%s' "${STDIN_DATA}" | "$@" >"$tmp_out" 2>"$tmp_err"
+        actual_exit=$?
+    else
+        "$@" </dev/null >"$tmp_out" 2>"$tmp_err"
+        actual_exit=$?
+    fi
+    actual_out=$(cat "$tmp_out")
+    actual_err=$(cat "$tmp_err")
+    rm -f "$tmp_out" "$tmp_err"
+
+    local ok=1
+    [ "${actual_exit}" = "${expect_exit}" ] || ok=0
+    [ "${actual_out}" = "${expect_out}" ] || ok=0
+    [ "${actual_err}" = "${expect_err}" ] || ok=0
+
+    if [ "${ok}" = "1" ]; then
+        pass=$((pass + 1))
+        printf '  PASS  %s\n' "${name}"
+    else
+        fail=$((fail + 1))
+        failures+=("${name}")
+        printf '  FAIL  %s\n' "${name}"
+        printf '        exit:    want=%s got=%s\n' "${expect_exit}" "${actual_exit}"
+        printf '        stdout:  want=%q\n                 got=%q\n' "${expect_out}" "${actual_out}"
+        printf '        stderr:  want=%q\n                 got=%q\n' "${expect_err}" "${actual_err}"
+    fi
+}
+
+echo "== running tests against ${DIE_BIN} =="
+
+# ---------- normal: ARG path ----------
+
+unset STDIN_DATA
+run_case 'arg/single'              1 '' 'msg'              -- "${DIE_BIN}" -- 'msg'
+run_case 'arg/multi-default-sep'   1 '' 'a b c'            -- "${DIE_BIN}" -- a b c
+run_case 'arg/sep-comma-space'     1 '' 'a, b, c'          -- "${DIE_BIN}" --sep ', ' -- a b c
+run_case 'arg/sep-empty'           1 '' 'abc'              -- "${DIE_BIN}" --sep '' -- a b c
+
+# --trim each (default): trim each ARG individually
+run_case 'arg/trim-each-default'   1 '' 'foo bar'          -- "${DIE_BIN}" -- ' foo ' ' bar '
+run_case 'arg/trim-each-explicit'  1 '' 'foo bar'          -- "${DIE_BIN}" --trim each -- ' foo ' ' bar '
+
+# --trim all: trim the joined string at both ends only.
+# " foo " + " " + " bar " = " foo   bar " (3 inner spaces) → trim both ends.
+run_case 'arg/trim-all'            1 '' 'foo   bar'        -- "${DIE_BIN}" --trim all -- ' foo ' ' bar '
+
+# --trim none: no trimming (LF still appended)
+run_case 'arg/trim-none'           1 '' ' foo   bar '      -- "${DIE_BIN}" --trim none -- ' foo ' ' bar '
+
+# Trailing LF normalisation on ARG path: the joined string always gets a LF
+# appended unless it already ends in LF (DR-0002). run_case strips the final
+# newline via $() — so the "expected stderr" string above represents the line
+# content; the suite below checks raw bytes for LF behaviour.
+
+# ---------- normal: stdin path (LF normalisation) ----------
+
+STDIN_DATA='X'
+run_case 'stdin/no-lf-normalised'       1 '' 'X'           -- "${DIE_BIN}"
+STDIN_DATA=$'X\n'
+run_case 'stdin/lf-preserved'           1 '' 'X'           -- "${DIE_BIN}"
+STDIN_DATA=''
+run_case 'stdin/empty-becomes-lf'       1 '' ''            -- "${DIE_BIN}"
+# stdin/double-lf-preserved: bash $() strips ALL trailing LFs from cmd substitution
+# so this case is verified via raw/stdin/double-lf below (raw byte comparison).
+STDIN_DATA=$'X\r\n'
+run_case 'stdin/crlf-treated-as-lf'     1 '' $'X\r'        -- "${DIE_BIN}"
+
+# -n disables normalisation
+STDIN_DATA='X'
+run_case 'stdin/-n-no-lf-appended'      1 '' 'X'           -- "${DIE_BIN}" -n
+STDIN_DATA=''
+run_case 'stdin/-n-empty-stays-empty'   1 '' ''            -- "${DIE_BIN}" -n
+
+# ARG + stdin supplied → ARG wins, stdin ignored
+STDIN_DATA='YYYY'
+run_case 'stdin+arg/arg-wins'           1 '' 'X'           -- "${DIE_BIN}" -- X
+
+# ---------- invariants: stdout is always empty, exit is always 1 ----------
+# (covered implicitly by the cases above — every expect_out is '' and every
+# expect_exit is 1)
+
+# ---------- raw-byte LF assertions (run_case strips trailing LF via $()) ----------
+# Verify that the ARG path appends LF to stderr.
+raw_byte_check() {
+    local name=$1 stdin_data=$2 expected_stderr=$3
+    shift 3
+    if [ "${1:-}" != '--' ]; then
+        echo "internal: raw_byte_check '${name}' missing --" >&2; return 2
+    fi
+    shift
+    local tmp; tmp=$(mktemp)
+    if [ -n "${stdin_data+set}" ] && [ "${stdin_data}" != '__NOSTDIN__' ]; then
+        printf '%s' "${stdin_data}" | "$@" 2>"$tmp" >/dev/null
+    else
+        "$@" </dev/null 2>"$tmp" >/dev/null
+    fi
+    local got; got=$(od -An -c "$tmp" | tr -d ' \n')
+    local want; want=$(printf '%s' "${expected_stderr}" | od -An -c | tr -d ' \n')
+    rm -f "$tmp"
+    if [ "${got}" = "${want}" ]; then
+        pass=$((pass + 1))
+        printf '  PASS  raw/%s\n' "${name}"
+    else
+        fail=$((fail + 1))
+        failures+=("raw/${name}")
+        printf '  FAIL  raw/%s\n' "${name}"
+        printf '        stderr bytes want=%s\n' "${want}"
+        printf '        stderr bytes got =%s\n' "${got}"
+    fi
+}
+
+raw_byte_check 'arg/lf-appended'       '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" -- 'msg'
+raw_byte_check 'arg/lf-not-duplicated' '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" -- $'msg\n'
+raw_byte_check 'stdin/lf-appended'     'X'           $'X\n'           -- "${DIE_BIN}"
+raw_byte_check 'stdin/-n-no-lf'        'X'           'X'              -- "${DIE_BIN}" -n
+raw_byte_check 'stdin/empty-default'   ''            $'\n'            -- "${DIE_BIN}"
+raw_byte_check 'stdin/empty-n-empty'   ''            ''               -- "${DIE_BIN}" -n
+raw_byte_check 'stdin/double-lf'       $'X\n\n'      $'X\n\n'         -- "${DIE_BIN}"
+
+# ---------- error / usage ----------
+# Error message text is implementation-detail. We only assert: exit=1, stdout
+# empty, stderr non-empty.
+soft_err_check() {
+    local name=$1; shift
+    local tmp_out tmp_err exit_code
+    tmp_out=$(mktemp); tmp_err=$(mktemp)
+    "$@" </dev/null >"$tmp_out" 2>"$tmp_err"
+    exit_code=$?
+    local out_size; out_size=$(wc -c <"$tmp_out" | tr -d ' ')
+    local err_size; err_size=$(wc -c <"$tmp_err" | tr -d ' ')
+    rm -f "$tmp_out" "$tmp_err"
+    if [ "${exit_code}" = "1" ] && [ "${out_size}" = "0" ] && [ "${err_size}" -gt 0 ]; then
+        pass=$((pass + 1))
+        printf '  PASS  err/%s\n' "${name}"
+    else
+        fail=$((fail + 1))
+        failures+=("err/${name}")
+        printf '  FAIL  err/%s  exit=%s stdout_size=%s stderr_size=%s\n' \
+            "${name}" "${exit_code}" "${out_size}" "${err_size}"
+    fi
+}
+
+soft_err_check 'missing-dash-dash'      "${DIE_BIN}" foo
+soft_err_check 'sep-without-value'      "${DIE_BIN}" --sep
+soft_err_check 'trim-invalid-value'     "${DIE_BIN}" --trim wrong -- foo
+soft_err_check 'unknown-long-option'    "${DIE_BIN}" --bogus -- foo
+
+# help on no-args + stdin redirected from /dev/null (== TTY-less but still
+# "no piped data"): impls may treat /dev/null differently from a TTY. The spec
+# says "ARGS empty + stdin TTY → help", so we cannot test the pure-TTY case
+# from this script. We at least verify exit=1 + stderr non-empty for the
+# "no args, /dev/null stdin" case as a reasonable proxy.
+soft_err_check 'help-when-no-args'      "${DIE_BIN}"
+
+# ---------- summary ----------
+echo
+echo "==== summary: pass=${pass} fail=${fail} ===="
+if [ "${fail}" -gt 0 ]; then
+    printf 'failures:\n'
+    for f in "${failures[@]}"; do printf '  - %s\n' "${f}"; done
+    exit 1
+fi
+exit 0
