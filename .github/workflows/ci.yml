@@ -152,6 +152,12 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf false
       - uses: mlugg/setup-zig@v2
+        with:
+          # Explicit version → setup-zig does not try to read build.zig.zon
+          # from the workflow's working-directory (which is repo root, not
+          # the zig/ subdirectory where our zon lives). Pinning the version
+          # also makes "stable Zig moves" visible as deliberate version bumps.
+          version: 0.16.0
       - name: build
         working-directory: zig
         run: |
