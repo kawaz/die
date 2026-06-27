@@ -242,3 +242,351 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     run(args)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── ascii_trim ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn trim_empty_string() {
+        assert_eq!(ascii_trim(""), "");
+    }
+
+    #[test]
+    fn trim_all_whitespace_only() {
+        assert_eq!(ascii_trim("   \t\n\x0B\x0C\r   "), "");
+    }
+
+    #[test]
+    fn trim_leading_sp() {
+        assert_eq!(ascii_trim(" hello"), "hello");
+    }
+
+    #[test]
+    fn trim_trailing_sp() {
+        assert_eq!(ascii_trim("hello "), "hello");
+    }
+
+    #[test]
+    fn trim_leading_ht() {
+        assert_eq!(ascii_trim("\thello"), "hello");
+    }
+
+    #[test]
+    fn trim_trailing_ht() {
+        assert_eq!(ascii_trim("hello\t"), "hello");
+    }
+
+    #[test]
+    fn trim_leading_lf() {
+        assert_eq!(ascii_trim("\nhello"), "hello");
+    }
+
+    #[test]
+    fn trim_trailing_lf() {
+        assert_eq!(ascii_trim("hello\n"), "hello");
+    }
+
+    #[test]
+    fn trim_leading_vt() {
+        assert_eq!(ascii_trim("\x0Bhello"), "hello");
+    }
+
+    #[test]
+    fn trim_trailing_vt() {
+        assert_eq!(ascii_trim("hello\x0B"), "hello");
+    }
+
+    #[test]
+    fn trim_leading_ff() {
+        assert_eq!(ascii_trim("\x0Chello"), "hello");
+    }
+
+    #[test]
+    fn trim_trailing_ff() {
+        assert_eq!(ascii_trim("hello\x0C"), "hello");
+    }
+
+    #[test]
+    fn trim_leading_cr() {
+        assert_eq!(ascii_trim("\rhello"), "hello");
+    }
+
+    #[test]
+    fn trim_trailing_cr() {
+        assert_eq!(ascii_trim("hello\r"), "hello");
+    }
+
+    #[test]
+    fn trim_combined_leading_trailing() {
+        assert_eq!(ascii_trim(" \t\r\n hello world \n\r\t "), "hello world");
+    }
+
+    #[test]
+    fn trim_preserves_interior_whitespace() {
+        assert_eq!(ascii_trim("  hello   world  "), "hello   world");
+    }
+
+    #[test]
+    fn trim_preserves_interior_tab_lf() {
+        assert_eq!(ascii_trim("\tfoo\tbar\n"), "foo\tbar");
+    }
+
+    #[test]
+    fn trim_no_whitespace() {
+        assert_eq!(ascii_trim("hello"), "hello");
+    }
+
+    // Unicode whitespace MUST NOT be trimmed (DR-0001: ASCII-only).
+    #[test]
+    fn trim_nbsp_u00a0_not_trimmed() {
+        // NBSP (U+00A0) — leading and trailing
+        let s = "\u{00A0}hello\u{00A0}";
+        assert_eq!(ascii_trim(s), s);
+    }
+
+    #[test]
+    fn trim_line_sep_u2028_not_trimmed() {
+        // LINE SEPARATOR (U+2028)
+        let s = "\u{2028}hello\u{2028}";
+        assert_eq!(ascii_trim(s), s);
+    }
+
+    #[test]
+    fn trim_fullwidth_sp_u3000_not_trimmed() {
+        // IDEOGRAPHIC SPACE (U+3000)
+        let s = "\u{3000}hello\u{3000}";
+        assert_eq!(ascii_trim(s), s);
+    }
+
+    // ── parse_trim ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_trim_each() {
+        assert!(matches!(parse_trim("each"), Some(Trim::Each)));
+    }
+
+    #[test]
+    fn parse_trim_all() {
+        assert!(matches!(parse_trim("all"), Some(Trim::All)));
+    }
+
+    #[test]
+    fn parse_trim_none() {
+        assert!(matches!(parse_trim("none"), Some(Trim::None)));
+    }
+
+    #[test]
+    fn parse_trim_rejects_empty() {
+        assert!(parse_trim("").is_none());
+    }
+
+    #[test]
+    fn parse_trim_rejects_unknown() {
+        assert!(parse_trim("EACH").is_none());
+        assert!(parse_trim("Both").is_none());
+        assert!(parse_trim("trim").is_none());
+        assert!(parse_trim(" each").is_none());
+        assert!(parse_trim("each ").is_none());
+    }
+
+    // ── join_args ────────────────────────────────────────────────────────────
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    // 0-arg cases
+    #[test]
+    fn join_zero_args_each() {
+        assert_eq!(join_args(&s(&[]), " ", Trim::Each), "");
+    }
+
+    #[test]
+    fn join_zero_args_all() {
+        assert_eq!(join_args(&s(&[]), " ", Trim::All), "");
+    }
+
+    #[test]
+    fn join_zero_args_none() {
+        assert_eq!(join_args(&s(&[]), " ", Trim::None), "");
+    }
+
+    // 1-arg cases
+    #[test]
+    fn join_one_arg_each_trims() {
+        assert_eq!(join_args(&s(&[" hello "]), " ", Trim::Each), "hello");
+    }
+
+    #[test]
+    fn join_one_arg_all_trims() {
+        assert_eq!(join_args(&s(&[" hello "]), " ", Trim::All), "hello");
+    }
+
+    #[test]
+    fn join_one_arg_none_preserves() {
+        assert_eq!(join_args(&s(&[" hello "]), " ", Trim::None), " hello ");
+    }
+
+    // 3-arg default sep
+    #[test]
+    fn join_three_args_each_default_sep() {
+        assert_eq!(join_args(&s(&[" a ", " b ", " c "]), " ", Trim::Each), "a b c");
+    }
+
+    #[test]
+    fn join_three_args_all_default_sep() {
+        // Trim::All joins first then strips outer whitespace
+        assert_eq!(join_args(&s(&[" a ", " b ", " c "]), " ", Trim::All), "a   b   c");
+    }
+
+    #[test]
+    fn join_three_args_none_default_sep() {
+        assert_eq!(join_args(&s(&[" a ", " b ", " c "]), " ", Trim::None), " a   b   c ");
+    }
+
+    // Empty sep
+    #[test]
+    fn join_three_args_each_empty_sep() {
+        assert_eq!(join_args(&s(&[" a ", " b ", " c "]), "", Trim::Each), "abc");
+    }
+
+    #[test]
+    fn join_three_args_none_empty_sep() {
+        assert_eq!(join_args(&s(&[" a ", " b ", " c "]), "", Trim::None), " a  b  c ");
+    }
+
+    // Multi-char sep
+    #[test]
+    fn join_three_args_each_multichar_sep() {
+        assert_eq!(join_args(&s(&[" a ", " b ", " c "]), " | ", Trim::Each), "a | b | c");
+    }
+
+    // Empty ARG mixed in
+    #[test]
+    fn join_with_empty_arg_each() {
+        // Empty ARG stays empty after trim
+        assert_eq!(join_args(&s(&["a", "", "b"]), " ", Trim::Each), "a  b");
+    }
+
+    #[test]
+    fn join_with_empty_arg_all() {
+        assert_eq!(join_args(&s(&["a", "", "b"]), " ", Trim::All), "a  b");
+    }
+
+    #[test]
+    fn join_with_empty_arg_none() {
+        assert_eq!(join_args(&s(&["a", "", "b"]), " ", Trim::None), "a  b");
+    }
+
+    #[test]
+    fn join_with_whitespace_only_arg_each() {
+        // Trim::Each trims each ARG; whitespace-only becomes ""
+        assert_eq!(join_args(&s(&["a", "  ", "b"]), "-", Trim::Each), "a--b");
+    }
+
+    #[test]
+    fn join_with_whitespace_only_arg_none() {
+        assert_eq!(join_args(&s(&["a", "  ", "b"]), "-", Trim::None), "a-  -b");
+    }
+
+    // Trim::All strips only leading/trailing of concatenated result
+    #[test]
+    fn join_all_strips_outer_only() {
+        assert_eq!(join_args(&s(&[" a ", " b "]), ",", Trim::All), "a , b");
+    }
+
+    // ── append_lf_str ────────────────────────────────────────────────────────
+
+    #[test]
+    fn append_lf_str_normalize_false_passes_through() {
+        let cases = ["", "X", "X\n", "X\r\n", "X\r", "X\n\n"];
+        for &c in &cases {
+            assert_eq!(append_lf_str(c.to_string(), false), c);
+        }
+    }
+
+    #[test]
+    fn append_lf_str_empty_gets_lf() {
+        // DR-0002: "" → "\n"
+        assert_eq!(append_lf_str("".to_string(), true), "\n");
+    }
+
+    #[test]
+    fn append_lf_str_no_trailing_lf_gets_lf() {
+        assert_eq!(append_lf_str("X".to_string(), true), "X\n");
+    }
+
+    #[test]
+    fn append_lf_str_trailing_lf_untouched() {
+        assert_eq!(append_lf_str("X\n".to_string(), true), "X\n");
+    }
+
+    #[test]
+    fn append_lf_str_trailing_crlf_untouched() {
+        // CRLF ends with \n → already ends with LF → no extra LF
+        assert_eq!(append_lf_str("X\r\n".to_string(), true), "X\r\n");
+    }
+
+    #[test]
+    fn append_lf_str_trailing_cr_gets_lf() {
+        // CR alone does NOT end with \n
+        assert_eq!(append_lf_str("X\r".to_string(), true), "X\r\n");
+    }
+
+    #[test]
+    fn append_lf_str_double_lf_preserved() {
+        assert_eq!(append_lf_str("X\n\n".to_string(), true), "X\n\n");
+    }
+
+    // ── append_lf_bytes ──────────────────────────────────────────────────────
+
+    #[test]
+    fn append_lf_bytes_normalize_false_passes_through() {
+        let cases: &[&[u8]] = &[b"", b"X", b"X\n", b"X\r\n", b"X\r", b"X\n\n"];
+        for &c in cases {
+            assert_eq!(append_lf_bytes(c.to_vec(), false), c);
+        }
+    }
+
+    #[test]
+    fn append_lf_bytes_empty_gets_lf() {
+        assert_eq!(append_lf_bytes(vec![], true), b"\n");
+    }
+
+    #[test]
+    fn append_lf_bytes_no_trailing_lf_gets_lf() {
+        assert_eq!(append_lf_bytes(b"X".to_vec(), true), b"X\n");
+    }
+
+    #[test]
+    fn append_lf_bytes_trailing_lf_untouched() {
+        assert_eq!(append_lf_bytes(b"X\n".to_vec(), true), b"X\n");
+    }
+
+    #[test]
+    fn append_lf_bytes_trailing_crlf_untouched() {
+        assert_eq!(append_lf_bytes(b"X\r\n".to_vec(), true), b"X\r\n");
+    }
+
+    #[test]
+    fn append_lf_bytes_trailing_cr_gets_lf() {
+        assert_eq!(append_lf_bytes(b"X\r".to_vec(), true), b"X\r\n");
+    }
+
+    #[test]
+    fn append_lf_bytes_double_lf_preserved() {
+        assert_eq!(append_lf_bytes(b"X\n\n".to_vec(), true), b"X\n\n");
+    }
+
+    #[test]
+    fn append_lf_bytes_arbitrary_binary_gets_lf() {
+        // Binary payload not ending in 0x0A
+        let input = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let mut expected = input.clone();
+        expected.push(b'\n');
+        assert_eq!(append_lf_bytes(input, true), expected);
+    }
+}

@@ -41,6 +41,9 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: go/go.sum
+      - name: unit tests
+        working-directory: go
+        run: go test ./...
       - name: build
         working-directory: go
         run: |
@@ -75,6 +78,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
+      - name: unit tests
+        working-directory: rust
+        run: cargo test
       - name: build
         working-directory: rust
         run: |
@@ -120,6 +126,9 @@ jobs:
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: unit tests
+        working-directory: mbt
+        run: moon test --target native
       - name: build
         working-directory: mbt
         run: |
@@ -158,6 +167,9 @@ jobs:
           # the zig/ subdirectory where our zon lives). Pinning the version
           # also makes "stable Zig moves" visible as deliberate version bumps.
           version: 0.16.0
+      - name: unit tests
+        working-directory: zig
+        run: zig build test --summary all
       - name: build
         working-directory: zig
         run: |

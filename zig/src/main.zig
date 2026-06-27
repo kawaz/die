@@ -196,6 +196,59 @@ fn buildArgOutput(rest_args: []const [:0]const u8, sep: []const u8, trim: Trim, 
     return buf;
 }
 
+// ---- append_lf helper (testable) -----------------------------------------
+
+/// Appends a trailing LF to `input` if normalize=true and the last byte is not '\n'.
+/// Returns a newly allocated slice (caller owns). Uses std allocator for tests.
+fn appendLfStr(allocator: std.mem.Allocator, input: []const u8, normalize: bool) ![]u8 {
+    if (!normalize) {
+        return allocator.dupe(u8, input);
+    }
+    if (input.len == 0 or input[input.len - 1] != '\n') {
+        var out = try allocator.alloc(u8, input.len + 1);
+        @memcpy(out[0..input.len], input);
+        out[input.len] = '\n';
+        return out;
+    }
+    return allocator.dupe(u8, input);
+}
+
+// ---- join helper (testable) -----------------------------------------------
+
+/// Joins `args` (plain []const u8 slices) with `sep` under the given `trim` mode.
+/// Does NOT append trailing LF. Returns a newly allocated slice (caller frees).
+fn joinArgs(allocator: std.mem.Allocator, args: []const []const u8, sep: []const u8, trim: Trim) ![]u8 {
+    // Use std.array_list.Managed which holds allocator internally (classic ArrayList API).
+    var buf = std.array_list.Managed(u8).init(allocator);
+    defer buf.deinit();
+
+    switch (trim) {
+        .each => {
+            for (args, 0..) |a, idx| {
+                try buf.appendSlice(trimSlice(a));
+                if (idx + 1 < args.len) try buf.appendSlice(sep);
+            }
+        },
+        .all => {
+            for (args, 0..) |a, idx| {
+                try buf.appendSlice(a);
+                if (idx + 1 < args.len) try buf.appendSlice(sep);
+            }
+            const t = trimSlice(buf.items);
+            const start = @intFromPtr(t.ptr) - @intFromPtr(buf.items.ptr);
+            const end = start + t.len;
+            return allocator.dupe(u8, buf.items[start..end]);
+        },
+        .none => {
+            for (args, 0..) |a, idx| {
+                try buf.appendSlice(a);
+                if (idx + 1 < args.len) try buf.appendSlice(sep);
+            }
+        },
+    }
+    return buf.toOwnedSlice();
+}
+
 // ---- Main ----------------------------------------------------------------
 
 pub fn main(init: process.Init.Minimal) noreturn {
@@ -297,4 +350,316 @@ pub fn main(init: process.Init.Minimal) noreturn {
         writeAll(STDERR, "\n");
     }
     process.exit(1);
+}
+
+// ============================================================
+// Unit tests
+// ============================================================
+
+const testing = std.testing;
+
+// ---- isAsciiWhitespace -----------------------------------------------------
+
+test "isAsciiWhitespace: SP (0x20)" {
+    try testing.expect(isAsciiWhitespace(' '));
+}
+test "isAsciiWhitespace: HT (0x09)" {
+    try testing.expect(isAsciiWhitespace('\t'));
+}
+test "isAsciiWhitespace: LF (0x0A)" {
+    try testing.expect(isAsciiWhitespace('\n'));
+}
+test "isAsciiWhitespace: VT (0x0B)" {
+    try testing.expect(isAsciiWhitespace(0x0B));
+}
+test "isAsciiWhitespace: FF (0x0C)" {
+    try testing.expect(isAsciiWhitespace(0x0C));
+}
+test "isAsciiWhitespace: CR (0x0D)" {
+    try testing.expect(isAsciiWhitespace('\r'));
+}
+test "isAsciiWhitespace: regular chars are not whitespace" {
+    try testing.expect(!isAsciiWhitespace('a'));
+    try testing.expect(!isAsciiWhitespace('0'));
+    try testing.expect(!isAsciiWhitespace('!'));
+    try testing.expect(!isAsciiWhitespace(0x00));
+    try testing.expect(!isAsciiWhitespace(0x1F));
+}
+
+// ---- trimSlice (ASCII-only) ------------------------------------------------
+
+test "trimSlice: empty string" {
+    try testing.expectEqualStrings("", trimSlice(""));
+}
+test "trimSlice: no whitespace" {
+    try testing.expectEqualStrings("hello", trimSlice("hello"));
+}
+test "trimSlice: leading SP" {
+    try testing.expectEqualStrings("x", trimSlice("  x"));
+}
+test "trimSlice: trailing SP" {
+    try testing.expectEqualStrings("x", trimSlice("x  "));
+}
+test "trimSlice: leading HT" {
+    try testing.expectEqualStrings("x", trimSlice("\tx"));
+}
+test "trimSlice: trailing HT" {
+    try testing.expectEqualStrings("x", trimSlice("x\t"));
+}
+test "trimSlice: leading LF" {
+    try testing.expectEqualStrings("x", trimSlice("\nx"));
+}
+test "trimSlice: trailing LF" {
+    try testing.expectEqualStrings("x", trimSlice("x\n"));
+}
+test "trimSlice: leading VT (0x0B)" {
+    try testing.expectEqualStrings("x", trimSlice("\x0Bx"));
+}
+test "trimSlice: trailing VT (0x0B)" {
+    try testing.expectEqualStrings("x", trimSlice("x\x0B"));
+}
+test "trimSlice: leading FF (0x0C)" {
+    try testing.expectEqualStrings("x", trimSlice("\x0Cx"));
+}
+test "trimSlice: trailing FF (0x0C)" {
+    try testing.expectEqualStrings("x", trimSlice("x\x0C"));
+}
+test "trimSlice: leading CR" {
+    try testing.expectEqualStrings("x", trimSlice("\rx"));
+}
+test "trimSlice: trailing CR" {
+    try testing.expectEqualStrings("x", trimSlice("x\r"));
+}
+test "trimSlice: combined leading whitespace all 6 kinds" {
+    try testing.expectEqualStrings("x", trimSlice(" \t\n\x0B\x0C\rx"));
+}
+test "trimSlice: combined trailing whitespace all 6 kinds" {
+    try testing.expectEqualStrings("x", trimSlice("x \t\n\x0B\x0C\r"));
+}
+test "trimSlice: both leading and trailing" {
+    try testing.expectEqualStrings("foo", trimSlice("  foo  "));
+}
+test "trimSlice: all whitespace returns empty" {
+    try testing.expectEqualStrings("", trimSlice("   \t\n\r"));
+}
+test "trimSlice: interior whitespace preserved" {
+    try testing.expectEqualStrings("a b", trimSlice("  a b  "));
+}
+test "trimSlice: interior tabs and newlines preserved" {
+    try testing.expectEqualStrings("a\tb\nc", trimSlice("  a\tb\nc  "));
+}
+// Unicode: NBSP (U+00A0) = 0xC2 0xA0 in UTF-8 — must NOT be trimmed
+test "trimSlice: NBSP (U+00A0) not trimmed as leading" {
+    const nbsp = "\xC2\xA0x";
+    try testing.expectEqualStrings(nbsp, trimSlice(nbsp));
+}
+test "trimSlice: NBSP (U+00A0) not trimmed as trailing" {
+    const nbsp = "x\xC2\xA0";
+    try testing.expectEqualStrings(nbsp, trimSlice(nbsp));
+}
+// U+2028 LINE SEPARATOR = 0xE2 0x80 0xA8 in UTF-8 — must NOT be trimmed
+test "trimSlice: U+2028 not trimmed" {
+    const ls = "\xE2\x80\xA8x";
+    try testing.expectEqualStrings(ls, trimSlice(ls));
+}
+// U+3000 IDEOGRAPHIC SPACE = 0xE3 0x80 0x80 in UTF-8 — must NOT be trimmed
+test "trimSlice: U+3000 fullwidth space not trimmed" {
+    const fsp = "\xE3\x80\x80x";
+    try testing.expectEqualStrings(fsp, trimSlice(fsp));
+}
+
+// ---- parseTrim -------------------------------------------------------------
+
+test "parseTrim: each" {
+    try testing.expectEqual(Trim.each, parseTrim("each").?);
+}
+test "parseTrim: all" {
+    try testing.expectEqual(Trim.all, parseTrim("all").?);
+}
+test "parseTrim: none" {
+    try testing.expectEqual(Trim.none, parseTrim("none").?);
+}
+test "parseTrim: empty string returns null" {
+    try testing.expectEqual(@as(?Trim, null), parseTrim(""));
+}
+test "parseTrim: unknown value returns null" {
+    try testing.expectEqual(@as(?Trim, null), parseTrim("EACH"));
+}
+test "parseTrim: partial match returns null" {
+    try testing.expectEqual(@as(?Trim, null), parseTrim("eac"));
+}
+test "parseTrim: trailing space returns null" {
+    try testing.expectEqual(@as(?Trim, null), parseTrim("each "));
+}
+test "parseTrim: leading space returns null" {
+    try testing.expectEqual(@as(?Trim, null), parseTrim(" each"));
+}
+test "parseTrim: mixed case returns null" {
+    try testing.expectEqual(@as(?Trim, null), parseTrim("Each"));
+}
+test "parseTrim: unrelated word returns null" {
+    try testing.expectEqual(@as(?Trim, null), parseTrim("trim"));
+}
+
+// ---- joinArgs --------------------------------------------------------------
+
+test "joinArgs: 0 args default sep each" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{}, " ", .each);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("", result);
+}
+test "joinArgs: 1 arg default sep each" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{"hello"}, " ", .each);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("hello", result);
+}
+test "joinArgs: 3 args default sep each" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "a", "b", "c" }, " ", .each);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("a b c", result);
+}
+test "joinArgs: 3 args empty sep each" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "a", "b", "c" }, "", .each);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("abc", result);
+}
+test "joinArgs: 3 args multi-char sep each" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "a", "b", "c" }, ", ", .each);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("a, b, c", result);
+}
+test "joinArgs: trim each trims each arg individually" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "  foo  ", "  bar  " }, " ", .each);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("foo bar", result);
+}
+test "joinArgs: trim each preserves empty after trim" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "  ", "x" }, " ", .each);
+    defer allocator.free(result);
+    try testing.expectEqualStrings(" x", result);
+}
+test "joinArgs: trim all trims joined result" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "  foo", "bar  " }, " ", .all);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("foo bar", result);
+}
+test "joinArgs: trim all interior whitespace preserved" {
+    const allocator = testing.allocator;
+    // "  a b  " ++ " " ++ "  c d  " = "  a b     c d  ", trimmed = "a b     c d" (5 spaces: 2 trailing + sep + 2 leading)
+    const result = try joinArgs(allocator, &.{ "  a b  ", "  c d  " }, " ", .all);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("a b     c d", result);
+}
+test "joinArgs: trim none no trimming" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "  foo  ", "  bar  " }, " ", .none);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("  foo     bar  ", result);
+}
+test "joinArgs: trim none preserves all whitespace" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "\tfoo\n", "\rbar\r\n" }, "|", .none);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("\tfoo\n|\rbar\r\n", result);
+}
+test "joinArgs: 0 args trim all" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{}, " ", .all);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("", result);
+}
+test "joinArgs: 0 args trim none" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{}, " ", .none);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("", result);
+}
+test "joinArgs: empty arg in middle trim each" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "a", "", "b" }, "-", .each);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("a--b", result);
+}
+test "joinArgs: all empty args trim each" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "", "" }, "-", .each);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("-", result);
+}
+test "joinArgs: all whitespace args trim all becomes empty" {
+    const allocator = testing.allocator;
+    const result = try joinArgs(allocator, &.{ "   ", "   " }, " ", .all);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("", result);
+}
+
+// ---- appendLfStr -----------------------------------------------------------
+
+test "appendLf: normalize=true input ending with LF unchanged" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "X\n", true);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("X\n", result);
+}
+test "appendLf: normalize=true input not ending with LF gets LF appended" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "X", true);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("X\n", result);
+}
+test "appendLf: normalize=true empty input gets LF appended" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "", true);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("\n", result);
+}
+test "appendLf: normalize=true CRLF ending counts as LF-terminated (no extra LF)" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "X\r\n", true);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("X\r\n", result);
+}
+test "appendLf: normalize=true double LF preserved (no dedup)" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "X\n\n", true);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("X\n\n", result);
+}
+test "appendLf: normalize=true lone CR gets LF appended" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "X\r", true);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("X\r\n", result);
+}
+test "appendLf: normalize=false input ending with LF unchanged" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "X\n", false);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("X\n", result);
+}
+test "appendLf: normalize=false input not ending with LF unchanged" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "X", false);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("X", result);
+}
+test "appendLf: normalize=false empty input unchanged" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "", false);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("", result);
+}
+test "appendLf: normalize=false CRLF unchanged" {
+    const allocator = testing.allocator;
+    const result = try appendLfStr(allocator, "X\r\n", false);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("X\r\n", result);
 }
