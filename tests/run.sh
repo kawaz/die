@@ -164,27 +164,18 @@ raw_byte_check() {
     fi
 }
 
-# On Windows, the C runtime text-mode converts \n → \r\n on output. die does
-# NOT intervene (DR-0005: no _setmode binary). So raw byte expectations for
-# output containing \n must use CRLF on Windows, LF elsewhere.
-# -n suppresses LF *appending* but does NOT bypass the CRT text-mode conversion:
-# if the impl writes a \n (from input content), it still gets converted to \r\n.
-case "${OSTYPE:-}" in
-    msys*|cygwin*|win32*)
-        _lf=$'\r\n'
-        ;;
-    *)
-        _lf=$'\n'
-        ;;
-esac
-
-raw_byte_check 'arg/lf-appended'       '__NOSTDIN__' "msg${_lf}"       -- "${DIE_BIN}" -- 'msg'
-raw_byte_check 'arg/lf-not-duplicated' '__NOSTDIN__' "msg${_lf}"       -- "${DIE_BIN}" -- $'msg\n'
-raw_byte_check 'stdin/lf-appended'     'X'           "X${_lf}"         -- "${DIE_BIN}"
-raw_byte_check 'stdin/-n-no-lf'        'X'           'X'               -- "${DIE_BIN}" -n
-raw_byte_check 'stdin/empty-default'   ''            "${_lf}"          -- "${DIE_BIN}"
-raw_byte_check 'stdin/empty-n-empty'   ''            ''                -- "${DIE_BIN}" -n
-raw_byte_check 'stdin/double-lf'       $'X\n\n'      "X${_lf}${_lf}"  -- "${DIE_BIN}"
+# Observed (CI 2026-06-27): on Windows runners, Go's os.Stderr, Rust's
+# io::stderr(), and Zig's extern write(2, ...) all bypass the CRT text-mode
+# layer and write bytes directly via WriteFile. So die's "\n" output reaches
+# stderr as a single 0x0A byte regardless of host OS, and tests can use plain
+# LF expectations on every runner.
+raw_byte_check 'arg/lf-appended'       '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" -- 'msg'
+raw_byte_check 'arg/lf-not-duplicated' '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" -- $'msg\n'
+raw_byte_check 'stdin/lf-appended'     'X'           $'X\n'           -- "${DIE_BIN}"
+raw_byte_check 'stdin/-n-no-lf'        'X'           'X'              -- "${DIE_BIN}" -n
+raw_byte_check 'stdin/empty-default'   ''            $'\n'            -- "${DIE_BIN}"
+raw_byte_check 'stdin/empty-n-empty'   ''            ''               -- "${DIE_BIN}" -n
+raw_byte_check 'stdin/double-lf'       $'X\n\n'      $'X\n\n'         -- "${DIE_BIN}"
 
 # ---------- error / usage ----------
 # Error message text is implementation-detail. We only assert: exit=1, stdout
