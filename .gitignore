@@ -6,6 +6,8 @@
 **/bin/
 **/dist/
 **/target/
+**/_build/
+**/.zig-cache/
 **/zig-cache/
 **/zig-out/
 
