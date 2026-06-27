@@ -135,7 +135,37 @@ run_case 'stdin+arg/arg-wins'           1 '' 'X'           -- "${DIE_BIN}" -- X
 # expect_exit is 1)
 
 # ---------- raw-byte LF assertions (run_case strips trailing LF via $()) ----------
-# Verify that the ARG path appends LF to stderr.
+#
+# Two check functions:
+#   raw_byte_check  — strict byte equality; used for -n cases (cat-equivalent, DR-0006)
+#   loose_eol_check — only asserts the output starts with a given prefix and ends
+#                     with \n or \r\n; used for default cases (cursor-safe, DR-0006)
+#
+# DR-0006: default mode only requires "cursor-safe" (ends with \n or \r\n).
+# Zig/MoonBit on Windows emit \r\n via CRT text-mode; Go/Rust emit \n via
+# WriteFile.  Both are spec-compliant.  The -n cases must be byte-exact (cat-
+# equivalent byte-transparent output).
+
+# Run cmd, capture stderr to file, return path in $1 (nameref).
+# Usage: _run_raw_capture TMPVAR STDIN_DATA -- CMD ARGS...
+#   STDIN_DATA == '__NOSTDIN__' → redirect stdin from /dev/null
+_run_raw_capture() {
+    local -n _out_tmp=$1
+    local _stdin=$2
+    shift 2
+    if [ "${1:-}" != '--' ]; then
+        echo "internal: _run_raw_capture missing --" >&2; return 2
+    fi
+    shift
+    _out_tmp=$(mktemp)
+    if [ "${_stdin}" != '__NOSTDIN__' ]; then
+        printf '%s' "${_stdin}" | "$@" 2>"${_out_tmp}" >/dev/null
+    else
+        "$@" </dev/null 2>"${_out_tmp}" >/dev/null
+    fi
+}
+
+# strict byte match — for -n cases
 raw_byte_check() {
     local name=$1 stdin_data=$2 expected_stderr=$3
     shift 3
@@ -143,12 +173,8 @@ raw_byte_check() {
         echo "internal: raw_byte_check '${name}' missing --" >&2; return 2
     fi
     shift
-    local tmp; tmp=$(mktemp)
-    if [ -n "${stdin_data+set}" ] && [ "${stdin_data}" != '__NOSTDIN__' ]; then
-        printf '%s' "${stdin_data}" | "$@" 2>"$tmp" >/dev/null
-    else
-        "$@" </dev/null 2>"$tmp" >/dev/null
-    fi
+    local tmp
+    _run_raw_capture tmp "${stdin_data}" -- "$@"
     local got; got=$(od -An -c "$tmp" | tr -d ' \n')
     local want; want=$(printf '%s' "${expected_stderr}" | od -An -c | tr -d ' \n')
     rm -f "$tmp"
@@ -164,18 +190,74 @@ raw_byte_check() {
     fi
 }
 
-# Observed (CI 2026-06-27): on Windows runners, Go's os.Stderr, Rust's
-# io::stderr(), and Zig's extern write(2, ...) all bypass the CRT text-mode
-# layer and write bytes directly via WriteFile. So die's "\n" output reaches
-# stderr as a single 0x0A byte regardless of host OS, and tests can use plain
-# LF expectations on every runner.
-raw_byte_check 'arg/lf-appended'       '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" -- 'msg'
-raw_byte_check 'arg/lf-not-duplicated' '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" -- $'msg\n'
-raw_byte_check 'stdin/lf-appended'     'X'           $'X\n'           -- "${DIE_BIN}"
-raw_byte_check 'stdin/-n-no-lf'        'X'           'X'              -- "${DIE_BIN}" -n
-raw_byte_check 'stdin/empty-default'   ''            $'\n'            -- "${DIE_BIN}"
-raw_byte_check 'stdin/empty-n-empty'   ''            ''               -- "${DIE_BIN}" -n
-raw_byte_check 'stdin/double-lf'       $'X\n\n'      $'X\n\n'         -- "${DIE_BIN}"
+# ends_with_newline FILE — true if last byte is \x0a OR last two bytes are \x0d\x0a
+ends_with_newline() {
+    local f=$1
+    local sz; sz=$(wc -c <"$f" | tr -d ' ')
+    [ "${sz}" -eq 0 ] && return 1
+    # check last byte
+    local last; last=$(tail -c 1 "$f" | od -An -tx1 | tr -d ' \n')
+    [ "${last}" = "0a" ] && return 0
+    # check last two bytes for \r\n
+    if [ "${sz}" -ge 2 ]; then
+        local last2; last2=$(tail -c 2 "$f" | od -An -tx1 | tr -d ' \n')
+        [ "${last2}" = "0d0a" ] && return 0
+    fi
+    return 1
+}
+
+# loose EOL check — for default cases (DR-0006: cursor-safe = ends with \n or \r\n)
+# Usage: loose_eol_check NAME STDIN_DATA EXPECTED_PREFIX -- CMD ARGS...
+#   EXPECTED_PREFIX: the output must start with these bytes (prefix match).
+#   Pass '' to skip prefix check.
+loose_eol_check() {
+    local name=$1 stdin_data=$2 expected_prefix=$3
+    shift 3
+    if [ "${1:-}" != '--' ]; then
+        echo "internal: loose_eol_check '${name}' missing --" >&2; return 2
+    fi
+    shift
+    local tmp
+    _run_raw_capture tmp "${stdin_data}" -- "$@"
+    local ok=1
+    local detail=''
+    # check ends with newline
+    if ! ends_with_newline "$tmp"; then
+        ok=0
+        detail+=' [not ending with \\n or \\r\\n]'
+    fi
+    # check prefix if given
+    if [ -n "${expected_prefix}" ]; then
+        local prefix_len=${#expected_prefix}
+        local got_prefix; got_prefix=$(head -c "${prefix_len}" "$tmp")
+        if [ "${got_prefix}" != "${expected_prefix}" ]; then
+            ok=0
+            detail+=" [prefix mismatch: want=$(printf '%s' "${expected_prefix}" | od -An -c | tr -d ' \n') got=$(printf '%s' "${got_prefix}" | od -An -c | tr -d ' \n')]"
+        fi
+    fi
+    rm -f "$tmp"
+    if [ "${ok}" = "1" ]; then
+        pass=$((pass + 1))
+        printf '  PASS  raw/%s\n' "${name}"
+    else
+        fail=$((fail + 1))
+        failures+=("raw/${name}")
+        printf '  FAIL  raw/%s%s\n' "${name}" "${detail}"
+    fi
+}
+
+# DR-0006 split:
+#   default cases (no -n): loose_eol_check — only assert "ends with \n or \r\n"
+#   -n cases:              raw_byte_check  — strict byte equality (cat-equivalent)
+loose_eol_check 'arg/lf-appended'       '__NOSTDIN__' 'msg'   -- "${DIE_BIN}" -- 'msg'
+loose_eol_check 'arg/lf-not-duplicated' '__NOSTDIN__' 'msg'   -- "${DIE_BIN}" -- $'msg\n'
+loose_eol_check 'stdin/lf-appended'     'X'           'X'     -- "${DIE_BIN}"
+raw_byte_check  'stdin/-n-no-lf'        'X'           'X'              -- "${DIE_BIN}" -n
+loose_eol_check 'stdin/empty-default'   ''            ''      -- "${DIE_BIN}"
+raw_byte_check  'stdin/empty-n-empty'   ''            ''               -- "${DIE_BIN}" -n
+# stdin/double-lf: input X\n\n preserves both trailing LFs; on Windows CRT
+# may convert to X\r\n\r\n.  Loose check: starts with "X" and ends with \n or \r\n.
+loose_eol_check 'stdin/double-lf'       $'X\n\n'      'X'     -- "${DIE_BIN}"
 
 # ---------- error / usage ----------
 # Error message text is implementation-detail. We only assert: exit=1, stdout

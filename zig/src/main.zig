@@ -6,6 +6,7 @@
 // Uses std.process.Init.Minimal for argv access (Zig 0.16.0 new main signature).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const process = std.process;
 
@@ -17,6 +18,27 @@ extern fn isatty(fd: i32) c_int;
 extern fn malloc(size: usize) ?*anyopaque;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
+
+// ---- Windows _setmode for binary / cat-equivalent output under -n --------
+//
+// On Windows, MSVCRT's _write() performs text-mode LF→CRLF conversion.
+// When -n is in effect (cat-equivalent, byte-transparent), we must suppress
+// this for both stdin (fd 0) and stderr (fd 2).
+// _O_BINARY = 0x8000 (MSVCRT constant).
+//
+// The extern declaration and call are fully compile-time gated so there is
+// zero overhead and no linker reference on POSIX.
+
+fn setModeBinary() void {
+    if (comptime builtin.target.os.tag == .windows) {
+        const _O_BINARY: c_int = 0x8000;
+        const _setmode = struct {
+            extern fn _setmode(fd: c_int, mode: c_int) c_int;
+        }._setmode;
+        _ = _setmode(STDIN, _O_BINARY);
+        _ = _setmode(STDERR, _O_BINARY);
+    }
+}
 
 const STDIN: i32 = 0;
 const STDOUT: i32 = 1;
@@ -234,6 +256,12 @@ pub fn main(init: process.Init.Minimal) noreturn {
             writeAll(STDERR, "\"\n");
             process.exit(1);
         }
+    }
+
+    // -n is in effect: switch stdin + stderr to binary mode on Windows so that
+    // output is byte-transparent (cat-equivalent). No-op on POSIX (compile-time).
+    if (!normalize) {
+        setModeBinary();
     }
 
     if (saw_dash_dash) {

@@ -25,7 +25,7 @@ die [-n] <FILE
 |---|---|
 | `--sep STR` | ARGS を結合する文字、default `" "` |
 | `--trim MODE` | ASCII whitespace 処理 (each / all / none)、default `each` |
-| `-n` | 末尾 LF の自動補完を disable |
+| `-n` | LF normalization を disable (= cat 同等 byte 透過出力) |
 
 ### 例
 

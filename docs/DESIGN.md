@@ -29,7 +29,7 @@ die [-n] <FILE
 |---|---|
 | `--sep STR` | Joiner between ARGS, default `" "` |
 | `--trim MODE` | ASCII-whitespace handling (`each` / `all` / `none`), default `each` |
-| `-n` | Disable trailing-LF normalization |
+| `-n` | Disable LF normalization (= cat equivalent byte-transparent output) |
 
 `--trim` MODE:
 
@@ -61,7 +61,7 @@ Unless `-n` is passed, if the content does not end with LF, one is appended. Pre
 
 This is intentionally different from `cat`, which is byte-safe. `die` is a first-class tool for human-readable stderr, so it defaults to preventing the case where the next shell prompt does not start on a new line.
 
-On Windows, the C runtime's text-mode default converts `\n` to `\r\n` on stderr — die does not intervene; that follows native Windows CLI convention. `-n` suppresses LF appending but does NOT bypass that conversion (die is a display tool, not byte-transparent).
+On Windows, default mode lets the CRT text-mode convert `\n` to `\r\n`; die does not intervene. With `-n`, the CRT conversion is suppressed for true byte-transparency (Rust / MoonBit / Zig call `_setmode(_O_BINARY)` on stderr; Go's WriteFile is already binary-transparent).
 
 ## Design Decisions
 

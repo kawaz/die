@@ -25,7 +25,7 @@ die [-n] <FILE
 |---|---|
 | `--sep STR` | Joiner between ARGS, default `" "` |
 | `--trim MODE` | ASCII-whitespace handling (each / all / none), default `each` |
-| `-n` | Disable trailing-LF normalization |
+| `-n` | Disable LF normalization (= cat equivalent byte-transparent output) |
 
 ### Examples
 

@@ -29,7 +29,7 @@ die [-n] <FILE
 |---|---|
 | `--sep STR` | ARGS を結合する区切り文字、default `" "` |
 | `--trim MODE` | ASCII whitespace 処理 (`each` / `all` / `none`)、default `each` |
-| `-n` | 末尾 LF の自動補完を disable |
+| `-n` | LF normalization を disable (= cat 同等 byte 透過出力) |
 
 `--trim` の MODE:
 
@@ -61,7 +61,7 @@ die [-n] <FILE
 
 `cat` の「バイナリ安全 = 一切改変しない」とは要件が違う。`die` は「人が読む stderr」を一級要件にしており、ターミナルが行頭で揃わない事故を default で防ぐ。
 
-Windows では C runtime の text-mode default が stderr の `\n` を `\r\n` に自動変換する。die はこの変換に介入しない (Windows native CLI 慣習に従う)。`-n` は末尾 LF の補完を抑制するが、CRT の text-mode 変換はバイパスしない (die は表示ツールであり、byte 透過ツールではない)。
+Windows では default モードで CRT text-mode が `\n` を `\r\n` に自動変換する。die はこの変換に介入しない。`-n` 時は CRT 変換を抑止して真の byte 透過を実現する (Rust / MoonBit / Zig は `_setmode(_O_BINARY)` を呼ぶ; Go は WriteFile が元から binary 透過)。
 
 ## 設計判断
 

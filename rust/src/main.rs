@@ -1,9 +1,29 @@
 // die — write a message to stderr and exit 1.
 //
-// Spec: see ../../docs/DESIGN.md (and DR-0001 / DR-0002 / DR-0005).
+// Spec: see ../../docs/DESIGN.md (and DR-0001 / DR-0002 / DR-0005 / DR-0006).
 
 use std::io::{self, Read, Write};
 use std::process::ExitCode;
+
+/// Switch stdin (fd 0) and stderr (fd 2) to binary mode on Windows.
+/// Called only under -n (cat-equivalent byte-transparent mode, DR-0006).
+/// On Unix this is a no-op; the CRT text-mode conversion does not exist.
+#[cfg(windows)]
+fn set_binary_mode() {
+    extern "C" {
+        fn _setmode(fd: i32, mode: i32) -> i32;
+    }
+    const _O_BINARY: i32 = 0x8000;
+    unsafe {
+        _setmode(0, _O_BINARY); // stdin
+        _setmode(2, _O_BINARY); // stderr
+    }
+}
+
+#[cfg(not(windows))]
+fn set_binary_mode() {
+    // No-op on non-Windows: no CRT text-mode conversion to suppress.
+}
 
 const HELP: &str = "\
 die — print ARGS (or stdin) to stderr and exit 1.
@@ -187,6 +207,12 @@ fn run(mut args: Vec<String>) -> ExitCode {
         } else {
             return usage_err(&["unknown option or missing -- before ARGS: \"", a, "\""].concat());
         }
+    }
+
+    // DR-0006: under -n, switch to binary mode on Windows to suppress CRT
+    // text-mode \n → \r\n conversion and achieve byte-transparent cat-equivalent.
+    if !normalize {
+        set_binary_mode();
     }
 
     let mut stderr = io::stderr();

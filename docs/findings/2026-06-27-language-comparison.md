@@ -37,6 +37,19 @@
 
 **現時点の暫定推奨**: **Rust** (= stable API + Windows 対応容易 + 充分小さい binary)。Zig は将来の有力候補だが 0.16.0 の breaking change が決定的に大きい。kawaz の最終判断待ち。
 
+### `-n` の意味と言語間 Windows 挙動差 (DR-0006)
+
+DR-0006 (2026-06-27) で `-n` の要件を「cat 同等 byte 透過」、default の要件を「カーソル崩れない (= 末尾 \n か \r\n で終わる)」と明文化。言語間の末尾 byte 差は default 動作にのみ生じる:
+
+| 言語 | default (Windows) | -n (Windows) |
+|------|------------------|--------------|
+| Go | `\n` (WriteFile 直叩き) | `\n` (変わらず) |
+| Rust | `\n` (std::io::stderr → WriteFile) | `\n` (`_setmode(_O_BINARY)` 呼ぶが元から binary) |
+| MoonBit | `\r\n` (extern "C" write → CRT text-mode) | `\n` (`_setmode(_O_BINARY)` 呼ぶ) |
+| Zig | `\r\n` (extern "C" write → CRT text-mode) | `\n` (`_setmode(_O_BINARY)` 呼ぶ) |
+
+tests/run.sh は DR-0006 に従い、default cases は `loose_eol_check`(末尾 \n or \r\n を確認)、`-n` cases は `raw_byte_check`(byte 厳密一致)で検証する二段構成になっている。
+
 ### Windows サポート (DR-0004 → DR-0005 で方針変更)
 
 DR-0004 で導入した `--eol auto|lf|crlf` は DR-0005 (2026-06-27) で廃止。Windows CRT の text-mode が `\n` → `\r\n` を自動変換する OS 慣習に乗ることで `--eol` option 自体が不要と判断。各実装から `--eol` parser / Windows `_setmode` 呼び出しが削除され、tests/run.sh の `raw_byte_check` が OSTYPE 分岐で Windows 側の期待値を CRLF に切替える形に簡素化された。詳細は [DR-0005](../decisions/DR-0005-drop-eol-option-respect-os-textmode.md) を参照。

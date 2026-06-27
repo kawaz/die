@@ -25,6 +25,11 @@ extern "c" fn c_read_into(fd : Int, buf : FixedArray[Byte], count : Int) -> Int 
 /// isatty(fd): returns 1 if fd refers to a terminal, 0 otherwise.
 extern "c" fn c_isatty(fd : Int) -> Int = "isatty"
 
+/// _setmode(fd, mode): set CRT text/binary mode on Windows.
+/// On POSIX, stub.c provides a no-op so this resolves at link time.
+/// _O_BINARY = 0x8000; suppresses \n -> \r\n CRT text-mode conversion.
+extern "c" fn c_setmode(fd : Int, mode : Int) -> Int = "_setmode"
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -50,6 +55,29 @@ let help_text : String =
   "  - With no ARGS, stdin (pipe/redirect) is forwarded to stderr; a missing\n" +
   "    trailing LF is appended unless -n is given.\n" +
   "  - On a TTY with no ARGS, this help is printed and exit 1.\n"
+
+// ---------------------------------------------------------------------------
+// Windows CRT binary mode (cat-equivalent for -n)
+// ---------------------------------------------------------------------------
+
+/// On Windows, suppress CRT text-mode \n -> \r\n conversion on stdin (0) and
+/// stderr (2) so that -n produces byte-transparent (cat-equivalent) output.
+/// On POSIX, stub.c provides a _setmode no-op so this is harmless.
+/// We gate on OS env var to avoid the overhead on POSIX builds that still
+/// link the stub (MoonBit native has no compile-time OS detection).
+///
+/// _O_BINARY = 0x8000
+fn enable_binary_mode() -> Unit {
+  let os = @env.get_env_var("OS")
+  match os {
+    Some("Windows_NT") => {
+      let _o_binary = 0x8000
+      let _ = c_setmode(stdin_fd, _o_binary)
+      let _ = c_setmode(stderr_fd, _o_binary)
+    }
+    _ => ()
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Low-level I/O helpers
@@ -255,6 +283,9 @@ fn main {
       i = args_len // break
     } else if a == "-n" {
       normalize = false
+      // DR-0006: -n means cat-equivalent byte-transparent output.
+      // Suppress CRT text-mode \n -> \r\n conversion on Windows.
+      enable_binary_mode()
       i += 1
     } else if a == "--sep" {
       if i + 1 >= args_len {
