@@ -1,0 +1,213 @@
+name: Release
+
+# VERSION ファイル変更を trigger に release を自動生成 (kawaz 標準フロー):
+#   1. check-version: VERSION 妥当性 + 旧 tag より大きいか (二重 release 防止)
+#   2. build: cross-compile matrix で各 target binary を作成
+#   3. release: gh release create でタグ + Release 作成 + binary 添付
+#   4. update-homebrew: kawaz/homebrew-tap に formula を自動更新
+#
+# tag は workflow 自身が打つ (gh release create が自動で作る)。人 / AI は
+# tag を扱わない (= kawaz 標準: release-flow-awareness rule)。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "VERSION"
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.current }}
+      changed: ${{ steps.version.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version change
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          CURRENT=$(tr -d '[:space:]' < VERSION)
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+
+          # VERSION=0.0.x プレースホルダ (= 初期未リリース状態) はスキップ
+          if [ -z "$CURRENT" ] || [ "$CURRENT" = "0.0.0" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Placeholder version (${CURRENT:-empty}); skipping release."
+            exit 0
+          fi
+
+          # 既存 release との重複チェック
+          if gh release view "v${CURRENT}" --repo "$REPO" >/dev/null 2>&1; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged: v${CURRENT} already released"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "New version detected: v${CURRENT}"
+          fi
+
+  build:
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-macos
+            asset: die-darwin-arm64
+          - target: x86_64-macos
+            asset: die-darwin-amd64
+          - target: x86_64-linux-gnu
+            asset: die-linux-amd64
+          - target: aarch64-linux-gnu
+            asset: die-linux-arm64
+          - target: x86_64-linux-musl
+            asset: die-linux-amd64-musl
+          - target: x86_64-windows-gnu
+            asset: die-windows-amd64.exe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Cross-compile (${{ matrix.target }})
+        env:
+          TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          zig build "-Dtarget=${TARGET}" -Doptimize=ReleaseSmall
+          # zig produces zig-out/bin/die (or die.exe for windows targets)
+          if [ -f zig-out/bin/die.exe ]; then
+            cp zig-out/bin/die.exe "${ASSET}"
+          else
+            cp zig-out/bin/die "${ASSET}"
+          fi
+          ls -lh "${ASSET}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Create release with tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check-version.outputs.version }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ls -lh
+          gh release create "v${VERSION}" \
+            --repo "$REPO" \
+            --title "v${VERSION}" \
+            --target "$COMMIT_SHA" \
+            --generate-notes \
+            die-*
+
+  update-homebrew:
+    needs: [check-version, release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Calculate checksums
+        id: checksums
+        run: |
+          set -euo pipefail
+          {
+            echo "darwin_arm64=$(sha256sum artifacts/die-darwin-arm64/die-darwin-arm64 | cut -d' ' -f1)"
+            echo "darwin_amd64=$(sha256sum artifacts/die-darwin-amd64/die-darwin-amd64 | cut -d' ' -f1)"
+            echo "linux_amd64=$(sha256sum artifacts/die-linux-amd64/die-linux-amd64 | cut -d' ' -f1)"
+            echo "linux_arm64=$(sha256sum artifacts/die-linux-arm64/die-linux-arm64 | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: kawaz/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: homebrew-tap
+      - name: Update formula
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+          DARWIN_ARM64: ${{ steps.checksums.outputs.darwin_arm64 }}
+          DARWIN_AMD64: ${{ steps.checksums.outputs.darwin_amd64 }}
+          LINUX_AMD64: ${{ steps.checksums.outputs.linux_amd64 }}
+          LINUX_ARM64: ${{ steps.checksums.outputs.linux_arm64 }}
+        run: |
+          set -euo pipefail
+          cat > homebrew-tap/Formula/die.rb <<FORMULA
+          class Die < Formula
+            desc "Tiny CLI: print ARGS (or stdin) to stderr and exit 1"
+            homepage "https://github.com/kawaz/die"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/kawaz/die/releases/download/v#{version}/die-darwin-arm64"
+                sha256 "${DARWIN_ARM64}"
+              end
+              on_intel do
+                url "https://github.com/kawaz/die/releases/download/v#{version}/die-darwin-amd64"
+                sha256 "${DARWIN_AMD64}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/kawaz/die/releases/download/v#{version}/die-linux-arm64"
+                sha256 "${LINUX_ARM64}"
+              end
+              on_intel do
+                url "https://github.com/kawaz/die/releases/download/v#{version}/die-linux-amd64"
+                sha256 "${LINUX_AMD64}"
+              end
+            end
+
+            def install
+              bin.install Dir["die-*"].first => "die"
+            end
+
+            test do
+              # die -- "msg" must write "msg\\n" to stderr and exit 1.
+              output = pipe_output("#{bin}/die -- testmsg 2>&1", nil, 1)
+              assert_match "testmsg", output
+            end
+          end
+          FORMULA
+      - name: Commit and push formula
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- Formula/die.rb; then
+            git add Formula/die.rb
+            git commit -m "Update die to ${VERSION}"
+            git push
+          else
+            echo "Formula unchanged; nothing to commit."
+          fi
