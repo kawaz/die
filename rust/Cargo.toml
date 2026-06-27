@@ -1,0 +1,19 @@
+[package]
+name = "die"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+authors = ["Yoshiaki Kawazu (@kawaz)"]
+description = "Write a message to stderr and exit 1."
+publish = false
+
+[[bin]]
+name = "die"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"   # size first
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
