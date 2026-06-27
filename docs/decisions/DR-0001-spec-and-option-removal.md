@@ -39,9 +39,11 @@ die [-n] <FILE
 
 ### `--trim` MODE の意味
 
-- `each`: 各 ARG の前後 whitespace を trim (= `" foo "` → `"foo"`)
-- `all`: 全 ARG を `--sep` で連結後、全体の前後 whitespace を trim
+- `each`: 各 ARG の前後 ASCII whitespace を trim (= `" foo "` → `"foo"`)
+- `all`: 全 ARG を `--sep` で連結後、全体の前後 ASCII whitespace を trim
 - `none`: 何もしない
+
+trim 対象は **ASCII whitespace 6 種** (`SP HT LF VT FF CR` = POSIX `[[:space:]]` 相当) のみ。NBSP (U+00A0) や U+2028 等の Unicode 拡張 whitespace は意図的に trim しない。shell の常識的な空白観 (= default IFS = `SP HT LF` + 一般的な空白制御文字) に倣う設計。
 
 ## Alternatives Considered
 

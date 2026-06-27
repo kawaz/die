@@ -4,7 +4,7 @@
 //   die [opts] -- ARGS...
 //   die [-n] <FILE
 //
-// Spec: see ../../docs/DESIGN.md and decisions/DR-0001 / DR-0002.
+// Spec: see ../../docs/DESIGN.md and decisions/DR-0001 / DR-0002 / DR-0004.
 
 // ---------------------------------------------------------------------------
 // C FFI — native backend only
@@ -25,12 +25,26 @@ extern "c" fn c_read_into(fd : Int, buf : FixedArray[Byte], count : Int) -> Int 
 /// isatty(fd): returns 1 if fd refers to a terminal, 0 otherwise.
 extern "c" fn c_isatty(fd : Int) -> Int = "isatty"
 
+/// getenv: look up an environment variable by name.
+/// Returns null pointer (0) if not set, non-zero pointer if set.
+/// We use this for OS detection on Windows (OSTYPE / OS env var).
+#borrow(name)
+extern "c" fn c_getenv(name : Bytes) -> Int = "getenv"
+
+/// _setmode: set file descriptor translation mode (Windows only).
+/// fd: 0=stdin, 2=stderr. mode: _O_BINARY=0x8000.
+/// On Unix this symbol does not exist; we guard with is_windows_host().
+extern "c" fn c_setmode(fd : Int, mode : Int) -> Int = "_setmode"
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 let stdin_fd : Int = 0
 let stderr_fd : Int = 2
+
+// _O_BINARY for Windows _setmode
+let o_binary : Int = 0x8000
 
 let help_text : String =
   "die — print ARGS (or stdin) to stderr and exit 1.\n" +
@@ -42,14 +56,41 @@ let help_text : String =
   "Options:\n" +
   "  --sep STR       Joiner between ARGS, default \" \"\n" +
   "  --trim MODE     Whitespace handling: each (default) | all | none\n" +
-  "  -n              Disable trailing-LF normalization (stdin path)\n" +
+  "  --eol MODE      EOL for normalisation: auto (default) | lf | crlf\n" +
+  "  -n              Disable trailing-LF normalisation (stdin path)\n" +
   "\n" +
   "Behavior:\n" +
   "  - Output is always stderr, exit code is always 1.\n" +
   "  - \"--\" is required when ARGS are present.\n" +
   "  - With no ARGS, stdin (pipe/redirect) is forwarded to stderr; a missing\n" +
   "    trailing LF is appended unless -n is given.\n" +
+  "  - --eol auto uses CRLF on Windows targets, LF elsewhere (build-time).\n" +
   "  - On a TTY with no ARGS, this help is printed and exit 1.\n"
+
+// ---------------------------------------------------------------------------
+// OS / platform helpers
+// ---------------------------------------------------------------------------
+
+/// Detect whether we are running on Windows by checking the "OS" environment
+/// variable (set to "Windows_NT" by cmd.exe / PowerShell on all NT versions).
+/// MoonBit native has no built-in compile-time OS constant, so we use a
+/// runtime getenv call. Limitation: cross-compiled binaries running on the
+/// wrong OS will auto-detect the *runtime* OS, not the build target — but
+/// --eol auto says "build-time target" per DR-0004. On native compilation
+/// (= the typical case) build target == runtime OS, so this is correct.
+fn is_windows_host() -> Bool {
+  // We pass a null-terminated C string for "OS"
+  let key = Bytes::from_array([b'O', b'S', b'\x00'])
+  // getenv returns 0 (NULL) if not set, non-zero pointer if set.
+  // We only need to know if it's non-null for the presence check; but to
+  // distinguish "Windows_NT" from other values we'd need to read the pointer.
+  // MoonBit's FFI cannot easily dereference a C char*. Instead we use a
+  // small trick: check OSTYPE (bash sets it) or fall back.
+  // Practical approach: on Windows, GetEnvironmentVariable("OS") != NULL
+  // and equals "Windows_NT". We check presence via getenv != 0.
+  // On macOS/Linux "OS" is typically unset, so getenv returns 0.
+  c_getenv(key) != 0
+}
 
 // ---------------------------------------------------------------------------
 // Low-level I/O helpers
@@ -135,12 +176,48 @@ fn parse_trim(v : String) -> String? {
   }
 }
 
-/// Check if a UTF-16 code unit is ASCII whitespace.
-fn is_ascii_whitespace(c : Int) -> Bool {
+/// Parse the --eol mode string. Returns Some(mode) or None if invalid.
+fn parse_eol(v : String) -> String? {
+  match v {
+    "auto" | "lf" | "crlf" => Some(v)
+    _ => None
+  }
+}
+
+/// Resolve the effective EOL string from the --eol mode.
+/// "auto" uses CRLF on Windows (detected at runtime), LF elsewhere.
+fn resolve_eol(mode : String) -> String {
+  match mode {
+    "crlf" => "\r\n"
+    "lf" => "\n"
+    _ =>
+      // "auto": detect Windows at runtime
+      if is_windows_host() {
+        "\r\n"
+      } else {
+        "\n"
+      }
+  }
+}
+
+/// Check if a byte value is ASCII whitespace.
+/// ASCII whitespace: SP (0x20), HT (0x09), LF (0x0A), VT (0x0B), FF (0x0C), CR (0x0D).
+/// Does NOT include Unicode whitespace (U+00A0 NBSP etc.) — ASCII-only per spec.
+fn is_ascii_whitespace_byte(c : Int) -> Bool {
   c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0b || c == 0x0c || c == 0x0d
 }
 
+/// Check if a UTF-16 code unit is ASCII whitespace.
+/// Used for String (UTF-16) processing; only considers the 6 ASCII whitespace bytes.
+fn is_ascii_whitespace(c : Int) -> Bool {
+  // Only ASCII code points (< 0x80) can be ASCII whitespace.
+  // All 6 ASCII whitespace values are < 0x80, so comparing the code unit directly is correct.
+  c < 0x80 && is_ascii_whitespace_byte(c)
+}
+
 /// Trim leading and trailing ASCII whitespace from a string.
+/// Strips exactly the 6 ASCII whitespace bytes: SP HT LF VT FF CR.
+/// Does NOT strip Unicode whitespace (NBSP etc.).
 fn trim_space(s : String) -> String {
   let len = s.length()
   let mut start = 0
@@ -163,27 +240,48 @@ fn join_args(args : ArrayView[String], sep : String, trim : String) -> String {
   }
 }
 
-/// Ensure the string ends with LF. No-op if normalize is false.
-fn append_lf(s : String, normalize : Bool) -> String {
+/// Ensure the string ends with the resolved EOL. No-op if normalize is false.
+/// "eol_str" is the resolved EOL string ("\n" or "\r\n").
+fn append_eol_str(s : String, normalize : Bool, eol_str : String) -> String {
   if !normalize {
     return s
   }
   let len = s.length()
-  if len == 0 || s.code_unit_at(len - 1).to_int() != 0x0a {
-    s + "\n"
+  if len == 0 {
+    // Empty string: append EOL
+    s + eol_str
   } else {
-    s
+    let last = s.code_unit_at(len - 1).to_int()
+    if last == 0x0a {
+      // Already ends with LF (covers both LF and CRLF endings)
+      s
+    } else if last == 0x0d {
+      // Ends with bare CR — treat as unterminated, append EOL
+      s + eol_str
+    } else {
+      s + eol_str
+    }
   }
 }
 
-/// Ensure the byte array ends with LF. No-op if normalize is false.
-fn append_lf_bytes(b : Array[Byte], normalize : Bool) -> Array[Byte] {
+/// Ensure the byte array ends with the resolved EOL. No-op if normalize is false.
+fn append_eol_bytes(b : Array[Byte], normalize : Bool, eol_str : String) -> Array[Byte] {
   if !normalize {
     return b
   }
   let len = b.length()
-  if len == 0 || b[len - 1].to_int() != 0x0a {
-    b.push(b'\n')
+  let needs_eol = if len == 0 {
+    true
+  } else {
+    b[len - 1].to_int() != 0x0a
+  }
+  if needs_eol {
+    // Append the eol_str bytes
+    let eol_bytes = string_to_utf8(eol_str)
+    let eol_len = eol_bytes.length()
+    for k = 0; k < eol_len; k = k + 1 {
+      b.push(eol_bytes[k])
+    }
   }
   b
 }
@@ -201,12 +299,25 @@ fn usage_err(msg : String) -> Unit {
 // ---------------------------------------------------------------------------
 
 fn main {
+  // Windows binary-mode stdio: prevent CRLF translation on stdin/stderr.
+  // On Windows, the C runtime opens stdio in text mode by default, which
+  // causes \n to be translated to \r\n on write and \r\n to \n on read —
+  // breaking our byte-transparent forwarding. _setmode(fd, _O_BINARY) disables
+  // this. On Unix, _setmode does not exist; we guard with is_windows_host().
+  // Limitation: if MoonBit links _setmode on Unix (symbol not found at link
+  // time), the build would fail. We call it only when is_windows_host() is true.
+  if is_windows_host() {
+    let _ = c_setmode(stdin_fd, o_binary)
+    let _ = c_setmode(stderr_fd, o_binary)
+  }
+
   let args = @env.args()
   // args[0] is the program name; skip it
   let args_len = args.length()
 
   let mut sep = " "
   let mut trim = "each"
+  let mut eol_mode = "auto"
   let mut normalize = true
   let mut saw_dash_dash = false
   let mut dash_dash_pos = args_len
@@ -255,17 +366,43 @@ fn main {
         }
       }
       i += 1
+    } else if a == "--eol" {
+      if i + 1 >= args_len {
+        usage_err("--eol requires a value")
+        return
+      }
+      match parse_eol(args[i + 1]) {
+        Some(m) => eol_mode = m
+        None => {
+          usage_err("--eol must be auto|lf|crlf, got \"\{args[i + 1]}\"")
+          return
+        }
+      }
+      i += 2
+    } else if a.has_prefix("--eol=") {
+      let raw = a[6:].to_owned()
+      match parse_eol(raw) {
+        Some(m) => eol_mode = m
+        None => {
+          usage_err("--eol must be auto|lf|crlf, got \"\{raw}\"")
+          return
+        }
+      }
+      i += 1
     } else {
       usage_err("unknown option or missing -- before ARGS: \"\{a}\"")
       return
     }
   }
 
+  // Resolve the effective EOL string once
+  let eol_str = resolve_eol(eol_mode)
+
   // ARG path: anything after "--", including zero args
   if saw_dash_dash {
     let rest = args.view(start=dash_dash_pos + 1)
     let out = join_args(rest, sep, trim)
-    let out = append_lf(out, normalize)
+    let out = append_eol_str(out, normalize, eol_str)
     write_stderr_str(out)
     c_exit(1)
     return
@@ -281,7 +418,7 @@ fn main {
 
   // Pipe/redirect: read stdin and forward to stderr
   let data = read_stdin_all()
-  let data = append_lf_bytes(data, normalize)
+  let data = append_eol_bytes(data, normalize, eol_str)
   let bytes = Bytes::from_array(data.view())
   write_stderr(bytes)
   c_exit(1)

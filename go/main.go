@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -29,6 +30,8 @@ Usage:
 Options:
   --sep STR       Joiner between ARGS, default " "
   --trim MODE     Whitespace handling: each (default) | all | none
+  --eol MODE      End-of-line for the appended terminator:
+                  auto (default; CRLF on Windows, LF elsewhere) | lf | crlf
   -n              Disable trailing-LF normalization (stdin path)
 
 Behavior:
@@ -47,6 +50,7 @@ func main() {
 func run(args []string, stdin io.Reader, stderr io.Writer) int {
 	sep := " "
 	trim := "each"
+	eol := defaultEOL()
 	normalize := true
 
 	// Phase 1: parse opts (everything before "--"). Any non-opt token before
@@ -91,6 +95,24 @@ func run(args []string, stdin io.Reader, stderr io.Writer) int {
 			}
 			trim = mode
 			i++
+		case a == "--eol":
+			if i+1 >= len(args) {
+				return usageErr(stderr, "--eol requires a value")
+			}
+			e, ok := parseEOL(args[i+1])
+			if !ok {
+				return usageErr(stderr, fmt.Sprintf("--eol must be auto|lf|crlf, got %q", args[i+1]))
+			}
+			eol = e
+			i += 2
+		case strings.HasPrefix(a, "--eol="):
+			raw := strings.TrimPrefix(a, "--eol=")
+			e, ok := parseEOL(raw)
+			if !ok {
+				return usageErr(stderr, fmt.Sprintf("--eol must be auto|lf|crlf, got %q", raw))
+			}
+			eol = e
+			i++
 		default:
 			return usageErr(stderr, fmt.Sprintf("unknown option or missing -- before ARGS: %q", a))
 		}
@@ -99,7 +121,7 @@ func run(args []string, stdin io.Reader, stderr io.Writer) int {
 	// ARG path: anything after "--", including zero args.
 	if sawDashDash {
 		out := joinArgs(rest, sep, trim)
-		out = appendLF(out, normalize)
+		out = appendEOL(out, normalize, eol)
 		_, _ = io.WriteString(stderr, out)
 		return exitFail
 	}
@@ -117,9 +139,31 @@ func run(args []string, stdin io.Reader, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "die: reading stdin: %v\n", err)
 		return exitFail
 	}
-	out := appendLFBytes(data, normalize)
+	out := appendEOLBytes(data, normalize, eol)
 	_, _ = stderr.Write(out)
 	return exitFail
+}
+
+// parseEOL returns the resolved 2-character (or 1-character) terminator,
+// translating auto into the build-time platform default.
+func parseEOL(v string) (string, bool) {
+	switch v {
+	case "auto":
+		return defaultEOL(), true
+	case "lf":
+		return "\n", true
+	case "crlf":
+		return "\r\n", true
+	default:
+		return "", false
+	}
+}
+
+func defaultEOL() string {
+	if runtime.GOOS == "windows" {
+		return "\r\n"
+	}
+	return "\n"
 }
 
 func parseTrim(v string) (string, bool) {
@@ -131,45 +175,67 @@ func parseTrim(v string) (string, bool) {
 	}
 }
 
-// joinArgs trims/joins per DR-0001 spec.
+// joinArgs trims/joins per DR-0001 spec. trim removes ONLY the 6 ASCII
+// whitespace bytes (' ', '\t', '\n', '\v', '\f', '\r'); Unicode whitespace
+// (NBSP, U+2028, etc.) is intentionally left alone — kawaz wants shell-default
+// IFS semantics, not Unicode-extended whitespace.
 func joinArgs(args []string, sep, trim string) string {
 	switch trim {
 	case "each":
 		parts := make([]string, len(args))
 		for i, a := range args {
-			parts[i] = strings.TrimSpace(a)
+			parts[i] = trimASCII(a)
 		}
 		return strings.Join(parts, sep)
 	case "all":
-		return strings.TrimSpace(strings.Join(args, sep))
+		return trimASCII(strings.Join(args, sep))
 	case "none":
 		return strings.Join(args, sep)
 	}
 	return strings.Join(args, sep)
 }
 
-// appendLF ensures the trailing byte is LF unless `normalize` is false. CRLF
-// terminators are treated as LF (i.e. not duplicated). Empty input becomes
-// "\n" (or "" with normalize=false). Pre-existing duplicate LFs (e.g. "\n\n")
-// are preserved.
-func appendLF(s string, normalize bool) string {
+func trimASCII(s string) string {
+	return strings.TrimFunc(s, isASCIIWhitespace)
+}
+
+func isASCIIWhitespace(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	}
+	return false
+}
+
+// appendEOL appends `eol` to s if normalisation is enabled AND s does not
+// already end with LF or CRLF. Pre-existing terminators are left alone — `eol`
+// only controls which terminator is appended to an unterminated input.
+func appendEOL(s string, normalize bool, eol string) string {
 	if !normalize {
 		return s
 	}
-	if len(s) == 0 || s[len(s)-1] != '\n' {
-		return s + "\n"
+	if endsWithEOL(s) {
+		return s
 	}
-	return s
+	return s + eol
 }
 
-func appendLFBytes(b []byte, normalize bool) []byte {
+func appendEOLBytes(b []byte, normalize bool, eol string) []byte {
 	if !normalize {
 		return b
 	}
-	if len(b) == 0 || b[len(b)-1] != '\n' {
-		return append(b, '\n')
+	if bytesEndWithEOL(b) {
+		return b
 	}
-	return b
+	return append(b, eol...)
+}
+
+func endsWithEOL(s string) bool {
+	return len(s) > 0 && s[len(s)-1] == '\n'
+}
+
+func bytesEndWithEOL(b []byte) bool {
+	return len(b) > 0 && b[len(b)-1] == '\n'
 }
 
 func usageErr(stderr io.Writer, msg string) int {

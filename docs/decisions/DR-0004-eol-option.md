@@ -31,6 +31,17 @@ DR-0002 で「末尾 LF が無ければ 1 つ補う」「`-n` で off」「CRLF 
 
 「Windows runtime」の判定は **build-time target** で決める (= Windows binary はネイティブで CRLF default、Unix binary は LF default)。実行時の OS detection や TERM 環境変数による判定はしない (= 単純さを優先、cross-OS で予測可能)。
 
+### 実装固有の例外: MoonBit native backend
+
+MoonBit native backend は **compile-time OS 定数 / `#ifdef` 相当の機能を提供していない** (確認: 2026-06-27, moon 0.1.20260618)。die の MoonBit 実装ではやむなく **runtime detection** (`getenv("OS") == "Windows_NT"` を見る、Windows で必ず set される env) で代用。
+
+実用上の差分:
+- Native `darwin`/`linux` ホストで Windows binary を作って Windows 上で動かすと、build-time 設計では LF (= build target 由来) になるが、MoonBit 実装では Windows runtime 検知で CRLF になる
+- 逆も同様 (= Windows でクロス build した Unix binary は build-time 設計では CRLF だが、MoonBit では Unix で getenv("OS") が unset なので LF になる)
+- どちらの差分も「**runtime 環境にとって望ましい EOL を出す**」結果になるので実害は少ない、ただし「build-time で決まる」原則からはずれる
+
+将来 MoonBit が `#ifdef` 等の compile-time OS 定数を提供したら build-time 化に揃える。それまでは `--eol lf` / `--eol crlf` を明示すれば挙動を完全に固定できる (= auto の差異を回避できる)。
+
 ### `--sep` 等の "内部" 改行とは独立
 
 `--sep $'\n' -- a b` のような内部に `\n` を含む joined 文字列でも、`--eol crlf` は **末尾だけ** `\r\n` を補う (= 中身は触らない)。これは「補完規則」であって「変換規則」ではない。

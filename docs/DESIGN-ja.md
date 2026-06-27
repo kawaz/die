@@ -28,14 +28,25 @@ die [-n] <FILE
 | option | 動作 |
 |---|---|
 | `--sep STR` | ARGS を結合する区切り文字、default `" "` |
-| `--trim MODE` | whitespace 処理 (`each` / `all` / `none`)、default `each` |
+| `--trim MODE` | ASCII whitespace 処理 (`each` / `all` / `none`)、default `each` |
+| `--eol MODE` | 補完する EOL (`auto` / `lf` / `crlf`)、default `auto` |
 | `-n` | 末尾 LF の自動補完を disable |
 
 `--trim` の MODE:
 
-- `each`: 各 ARG の前後 whitespace を trim (= `" foo "` → `"foo"`)
-- `all`: 全 ARG を `--sep` で連結後、全体の前後 whitespace を trim
+- `each`: 各 ARG の前後 ASCII whitespace を trim (= `" foo "` → `"foo"`)
+- `all`: 全 ARG を `--sep` で連結後、全体の前後 ASCII whitespace を trim
 - `none`: 何もしない
+
+`--trim` が消すのは ASCII whitespace 6 種 (SP, HT, LF, VT, FF, CR = POSIX `[[:space:]]`) のみ。NBSP や U+2028 等の Unicode whitespace は意図的に対象外 (= shell の常識的な空白観に倣う)。
+
+`--eol` の MODE (DR-0004):
+
+- `auto`: Windows ビルドなら CRLF、それ以外 LF (= build-time 判定)
+- `lf`: 常に `\n`
+- `crlf`: 常に `\r\n`
+
+`--eol` は LF normalisation で補う terminator だけを制御。既存の末尾 LF / CRLF は触らない (DR-0002 維持)、`-n` 指定時は normalisation 自体が off なので `--eol` は効果なし。
 
 ### 不変条件
 

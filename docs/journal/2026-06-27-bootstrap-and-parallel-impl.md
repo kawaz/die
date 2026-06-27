@@ -69,10 +69,44 @@ die リポの初回 commit + 初回 push を完了し、4 言語 (Go / Rust / Mo
   - bump-semver canonical justfile の `_check-version-bumped` を initial push 対応に
   - jj-tips skill に「.gitignore 行内コメント不可」追加
 
+## 追記: DR-0004 (--eol) + ASCII trim 確定 + Windows 対応
+
+午後の作業内容:
+
+### CI 失敗観察
+
+初回 push (`7b6380a`) で CI workflow 失敗:
+- `Windows × {go, rust, zig}`: `stdin/crlf-treated-as-lf` で 1 件ずつ fail。bash (git-bash) の pipe transport が `\r` を strip して子プロセスに届けるためで、impl 側の問題ではない (= POSIX 環境からは確認できない pipe 段階の挙動)。**解決**: tests/run.sh で `OSTYPE` が msys/cygwin の時は当該 case を skip ([[test-failure-no-tampering]] 観点で test 改変ではなく明示 SKIP)
+- `Windows × zig`: 上記に加え `raw/*` 系 5 件 fail。Zig の `extern "C" write` が Windows C runtime の text-mode default で `\n` → `\r\n` に変換されてた。**解決**: `_setmode(0/1/2, _O_BINARY)` を Windows のみ呼ぶ (= Workflow subagent で実施)
+- `mbt × {ubuntu, macos}`: ci.yml の build step が `find . -name 'main.exe' -o -name 'die'` だけで cp してなかった。**解決**: `cp _build/native/release/build/main/main.exe bin/die` に修正
+
+### DR-0004: --eol auto|lf|crlf
+
+Windows ターミナル (cmd.exe / PowerShell / Terminal) で `\n` だけだとプロンプトが行頭に来ない問題への対処。設計:
+- `auto` (default): build-time target が Windows なら CRLF、それ以外 LF (= runtime detection ではない、cross-OS で予測可能)
+- `lf` / `crlf`: 強制
+- 影響範囲: 補う EOL のみ、既存 LF/CRLF は触らない、`-n` で normalisation off なら無効
+
+### trim 仕様明確化: ASCII whitespace 6 種
+
+kawaz と議論を経て確定。「シェル挙動に倣う」「常識的な空白」「`\v`/`\f` ばかり並ぶ ARG が空白として出力されるのはユーザの意図でないので削除側に倒す」という意図整理から、
+
+- **対象**: SP, HT, LF, VT, FF, CR の 6 種 (POSIX `[[:space:]]` 相当)
+- **対象外**: NBSP, U+2028 等の Unicode whitespace (= 意味のある文字として残す)
+
+DR-0001 の Decision に追記、各実装も `unicode.IsSpace` 系から ASCII 限定 trim に統一。
+
+### TDD-ish 進行
+
+`tests/run.sh` に DR-0004 用 11 case 追加 (`--eol lf`/`--eol crlf` の組合せ + `-n` で無効化される確認 + 既存 LF/CRLF 終端への dup 不発)。Go impl 修正 → 38/38 pass。Rust も subagent 経由で 38/38 pass。MoonBit / Zig は Workflow で並列進行中。
+
+注意: ARG path で `--trim each` (default) は `\r\n` 終端を strip するので「`--eol crlf` で既存 LF 終端への dup 不発」の検証には `--trim none` 経由が必要。test 内コメントに明記。
+
 ## 次の TODO
 
-- [ ] MoonBit / Zig 実装の subagent 完了を待つ → findings に append
-- [ ] 4 実装出揃ったら採用言語決定 (judge panel? kawaz の主観評価?)
+- [ ] Workflow (MoonBit / Zig) 完了待ち → 結果統合 commit + push
+- [ ] 再 push 後の CI 確認 (= Windows 含む全 cell green を期待)
+- [ ] 4 実装出揃ったら採用言語決定 (kawaz の主観評価 + dogfood 経過)
 - [ ] release.yml + homebrew tap formula (= 採用後、無駄打ち回避)
 - [ ] dogfood (= 他リポの justfile / shell script で die を使う)
 - [ ] 不採用言語の実装を削除 (= 1 binary に絞る、DR-0003 方針)

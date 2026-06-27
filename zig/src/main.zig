@@ -1,6 +1,6 @@
 // die — write a message to stderr and exit 1.
 //
-// Spec: see ../../docs/DESIGN.md (and DR-0001 / DR-0002).
+// Spec: see ../../docs/DESIGN.md (and DR-0001 / DR-0002 / DR-0004).
 //
 // Uses raw POSIX extern calls for I/O to bypass Zig 0.16.0's new async Io API.
 // Uses std.process.Init.Minimal for argv access (Zig 0.16.0 new main signature).
@@ -19,7 +19,15 @@ extern fn malloc(size: usize) ?*anyopaque;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
 
+// ---- Windows-only: binary-mode stdio -------------------------------------
+// On Windows, CRT stdio defaults to text mode which translates \n to \r\n on
+// write and strips \r on read. Force binary mode on fd 0/1/2 so that the raw
+// byte content we write to stderr is not mangled.
+const _O_BINARY: c_int = 0x8000;
+extern "C" fn _setmode(fd: c_int, mode: c_int) c_int;
+
 const STDIN: i32 = 0;
+const STDOUT: i32 = 1;
 const STDERR: i32 = 2;
 
 // ---- Help text -----------------------------------------------------------
@@ -34,6 +42,7 @@ const HELP =
     \\Options:
     \\  --sep STR       Joiner between ARGS, default " "
     \\  --trim MODE     Whitespace handling: each (default) | all | none
+    \\  --eol MODE      EOL for missing trailing newline: auto (default) | lf | crlf
     \\  -n              Disable trailing-LF normalization (stdin path)
     \\
     \\Behavior:
@@ -41,6 +50,7 @@ const HELP =
     \\  - "--" is required when ARGS are present.
     \\  - With no ARGS, stdin (pipe/redirect) is forwarded to stderr; a missing
     \\    trailing LF is appended unless -n is given.
+    \\  - --eol auto uses CRLF on Windows targets, LF elsewhere.
     \\  - On a TTY with no ARGS, this help is printed and exit 1.
     \\
 ;
@@ -125,9 +135,27 @@ fn parseTrim(s: []const u8) ?Trim {
     return null;
 }
 
+const Eol = enum { auto, lf, crlf };
+
+fn parseEol(s: []const u8) ?Eol {
+    if (mem.eql(u8, s, "auto")) return .auto;
+    if (mem.eql(u8, s, "lf")) return .lf;
+    if (mem.eql(u8, s, "crlf")) return .crlf;
+    return null;
+}
+
+/// Resolve the EOL bytes to append when normalising a missing trailing newline.
+fn resolveEol(eol: Eol) []const u8 {
+    return switch (eol) {
+        .lf => "\n",
+        .crlf => "\r\n",
+        .auto => if (builtin.target.os.tag == .windows) "\r\n" else "\n",
+    };
+}
+
 // ---- Build output string for ARG path ------------------------------------
 
-fn buildArgOutput(rest_args: []const [:0]const u8, sep: []const u8, trim: Trim, normalize: bool) ?Buf {
+fn buildArgOutput(rest_args: []const [:0]const u8, sep: []const u8, trim: Trim, normalize: bool, eol: Eol) ?Buf {
     var buf: Buf = .{};
 
     switch (trim) {
@@ -172,7 +200,7 @@ fn buildArgOutput(rest_args: []const [:0]const u8, sep: []const u8, trim: Trim, 
     if (normalize) {
         const s = buf.slice();
         if (s.len == 0 or s[s.len - 1] != '\n') {
-            if (!buf.appendByte('\n')) { buf.deinit(); return null; }
+            if (!buf.appendSlice(resolveEol(eol))) { buf.deinit(); return null; }
         }
     }
 
@@ -182,6 +210,14 @@ fn buildArgOutput(rest_args: []const [:0]const u8, sep: []const u8, trim: Trim, 
 // ---- Main ----------------------------------------------------------------
 
 pub fn main(init: process.Init.Minimal) noreturn {
+    // On Windows, force binary mode on stdin/stdout/stderr so that CRT text-mode
+    // translation (\n <-> \r\n) does not corrupt our raw byte output.
+    if (builtin.target.os.tag == .windows) {
+        _ = _setmode(STDIN, _O_BINARY);
+        _ = _setmode(STDOUT, _O_BINARY);
+        _ = _setmode(STDERR, _O_BINARY);
+    }
+
     // Use page_allocator arena for argv slice conversion.
     // On POSIX, Args.toSlice with an arena is allocation-free (it borrows the
     // process's argv directly). On Windows it would allocate WTF-8 conversions.
@@ -197,6 +233,7 @@ pub fn main(init: process.Init.Minimal) noreturn {
 
     var sep: []const u8 = " ";
     var trim: Trim = .each;
+    var eol: Eol = .auto;
     var normalize: bool = true;
     var saw_dash_dash: bool = false;
     var rest_start: usize = 0;
@@ -231,6 +268,17 @@ pub fn main(init: process.Init.Minimal) noreturn {
             trim = parseTrim(v) orelse
                 die("die: --trim must be each|all|none\n");
             i += 1;
+        } else if (mem.eql(u8, a, "--eol")) {
+            if (i + 1 >= args.len) die("die: --eol requires a value\n");
+            i += 1;
+            eol = parseEol(args[i]) orelse
+                die("die: --eol must be auto|lf|crlf\n");
+            i += 1;
+        } else if (mem.startsWith(u8, a, "--eol=")) {
+            const v = a["--eol=".len..];
+            eol = parseEol(v) orelse
+                die("die: --eol must be auto|lf|crlf\n");
+            i += 1;
         } else {
             writeAll(STDERR, "die: unknown option or missing -- before ARGS: \"");
             writeAll(STDERR, a);
@@ -241,7 +289,7 @@ pub fn main(init: process.Init.Minimal) noreturn {
 
     if (saw_dash_dash) {
         const rest = args[rest_start..];
-        var out = buildArgOutput(rest, sep, trim, normalize) orelse
+        var out = buildArgOutput(rest, sep, trim, normalize, eol) orelse
             die("die: out of memory\n");
         defer out.deinit();
         writeAll(STDERR, out.slice());
@@ -269,7 +317,7 @@ pub fn main(init: process.Init.Minimal) noreturn {
     const data = buf.slice();
     writeAll(STDERR, data);
     if (normalize and (data.len == 0 or data[data.len - 1] != '\n')) {
-        writeAll(STDERR, "\n");
+        writeAll(STDERR, resolveEol(eol));
     }
     process.exit(1);
 }

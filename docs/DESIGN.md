@@ -28,14 +28,25 @@ die [-n] <FILE
 | option | behavior |
 |---|---|
 | `--sep STR` | Joiner between ARGS, default `" "` |
-| `--trim MODE` | Whitespace handling (`each` / `all` / `none`), default `each` |
+| `--trim MODE` | ASCII-whitespace handling (`each` / `all` / `none`), default `each` |
+| `--eol MODE` | Appended terminator (`auto` / `lf` / `crlf`), default `auto` |
 | `-n` | Disable trailing-LF normalization |
 
 `--trim` MODE:
 
-- `each`: trim whitespace around each ARG individually (e.g. `" foo "` → `"foo"`)
-- `all`: trim whitespace around the joined string (after `--sep` concatenation)
+- `each`: strip ASCII whitespace around each ARG individually (e.g. `" foo "` → `"foo"`)
+- `all`: strip ASCII whitespace around the joined string (after `--sep` concatenation)
 - `none`: no trimming
+
+`--trim` strips only the 6 ASCII whitespace bytes (SP, HT, LF, VT, FF, CR — POSIX `[[:space:]]`). Unicode whitespace such as NBSP or U+2028 is intentionally not stripped — the conventional shell view of whitespace is what we follow.
+
+`--eol` MODE (DR-0004):
+
+- `auto`: CRLF on Windows builds, LF elsewhere (build-time decision)
+- `lf`: always `\n`
+- `crlf`: always `\r\n`
+
+`--eol` controls only the terminator appended during LF normalisation; pre-existing trailing LF or CRLF is left alone, and `-n` disables normalisation entirely (so `--eol` becomes a no-op under `-n`).
 
 ### Invariants
 
