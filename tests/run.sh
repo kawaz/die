@@ -256,19 +256,21 @@ raw_byte_check() {
 # Either is spec-compliant per DR-0005 / DR-0006: die only commits to the
 # die-controlled byte string; the host runtime's text-mode layer may expand
 # \n to \r\n on Windows, and that is allowed.
-# crt_expand BYTES → bytes with every \n that isn't already preceded by \r
-# replaced with \r\n. Emulates Windows MSVCRT _write text-mode behaviour.
+# crt_expand BYTES → bytes with every \n replaced by \r\n. Emulates Windows
+# MSVCRT _write text-mode behaviour, which expands EVERY \n unconditionally
+# (even if the \n is already preceded by \r — empirically observed on the
+# windows-latest runner: zig 'X\r' input → die write "X\r\n" → MSVCRT emits
+# "X\r\r\n").
 # Pure bash (no sed/awk) for portability across BSD/GNU/MSYS coreutils.
 crt_expand() {
-    local in=$1 out='' prev='' i ch
+    local in=$1 out='' i ch
     for (( i = 0; i < ${#in}; i++ )); do
         ch=${in:i:1}
-        if [ "$ch" = $'\n' ] && [ "$prev" != $'\r' ]; then
+        if [ "$ch" = $'\n' ]; then
             out+=$'\r\n'
         else
             out+=$ch
         fi
-        prev=$ch
     done
     printf '%s' "$out"
 }
