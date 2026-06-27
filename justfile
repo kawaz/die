@@ -90,7 +90,7 @@ build-rust:
 # moon build → mbt/bin/die (native backend)
 [private]
 build-mbt:
-    cd mbt && moon build --target native --release && mkdir -p bin && cp _build/native/release/build/main/main.exe bin/die
+    cd mbt && moon build --target native --release && mkdir -p bin && cp _build/native/release/build/main/main.exe bin/die && strip -x bin/die
 
 # zig build-exe → zig/bin/die
 [private]

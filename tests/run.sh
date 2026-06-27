@@ -164,36 +164,27 @@ raw_byte_check() {
     fi
 }
 
-raw_byte_check 'arg/lf-appended'       '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" -- 'msg'
-raw_byte_check 'arg/lf-not-duplicated' '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" -- $'msg\n'
-raw_byte_check 'stdin/lf-appended'     'X'           $'X\n'           -- "${DIE_BIN}"
-raw_byte_check 'stdin/-n-no-lf'        'X'           'X'              -- "${DIE_BIN}" -n
-raw_byte_check 'stdin/empty-default'   ''            $'\n'            -- "${DIE_BIN}"
-raw_byte_check 'stdin/empty-n-empty'   ''            ''               -- "${DIE_BIN}" -n
-raw_byte_check 'stdin/double-lf'       $'X\n\n'      $'X\n\n'         -- "${DIE_BIN}"
+# On Windows, the C runtime text-mode converts \n → \r\n on output. die does
+# NOT intervene (DR-0005: no _setmode binary). So raw byte expectations for
+# output containing \n must use CRLF on Windows, LF elsewhere.
+# -n suppresses LF *appending* but does NOT bypass the CRT text-mode conversion:
+# if the impl writes a \n (from input content), it still gets converted to \r\n.
+case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+        _lf=$'\r\n'
+        ;;
+    *)
+        _lf=$'\n'
+        ;;
+esac
 
-# ---------- DR-0004: --eol auto|lf|crlf ----------
-# --eol affects ONLY the terminator appended during normalisation. Existing
-# trailing LF / CRLF is left alone (DR-0002 invariant preserved). -n still
-# disables normalisation entirely. --eol auto is build-time/host-dependent
-# (Windows → CRLF, otherwise → LF) and is therefore tested via lf/crlf only.
-raw_byte_check 'arg/eol-lf-explicit'   '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" --eol lf   -- 'msg'
-raw_byte_check 'arg/eol-crlf-explicit' '__NOSTDIN__' $'msg\r\n'       -- "${DIE_BIN}" --eol crlf -- 'msg'
-# Note: with --trim each (default), trailing LF/CRLF in a single ARG is
-# stripped *before* EOL append, so we cannot exercise "no-dup on LF tail"
-# via the ARG path. Use --trim none to preserve the existing terminator.
-raw_byte_check 'arg/eol-crlf-no-dup-on-lf-tail'    '__NOSTDIN__' $'msg\n'   -- "${DIE_BIN}" --trim none --eol crlf -- $'msg\n'
-raw_byte_check 'arg/eol-crlf-no-dup-on-crlf-tail'  '__NOSTDIN__' $'msg\r\n' -- "${DIE_BIN}" --trim none --eol crlf -- $'msg\r\n'
-
-raw_byte_check 'stdin/eol-lf-explicit'   'X'           $'X\n'         -- "${DIE_BIN}" --eol lf
-raw_byte_check 'stdin/eol-crlf-explicit' 'X'           $'X\r\n'       -- "${DIE_BIN}" --eol crlf
-raw_byte_check 'stdin/eol-crlf-empty'    ''            $'\r\n'        -- "${DIE_BIN}" --eol crlf
-raw_byte_check 'stdin/eol-crlf-no-dup-on-lf-tail'    $'X\n'   $'X\n'    -- "${DIE_BIN}" --eol crlf
-raw_byte_check 'stdin/eol-crlf-no-dup-on-crlf-tail'  $'X\r\n' $'X\r\n'  -- "${DIE_BIN}" --eol crlf
-
-# -n overrides --eol (no appending at all)
-raw_byte_check 'stdin/-n-with-eol-crlf-still-empty' 'X' 'X'           -- "${DIE_BIN}" -n --eol crlf
-raw_byte_check 'arg/-n-with-eol-crlf-still-empty'   '__NOSTDIN__' 'msg' -- "${DIE_BIN}" -n --eol crlf -- 'msg'
+raw_byte_check 'arg/lf-appended'       '__NOSTDIN__' "msg${_lf}"       -- "${DIE_BIN}" -- 'msg'
+raw_byte_check 'arg/lf-not-duplicated' '__NOSTDIN__' "msg${_lf}"       -- "${DIE_BIN}" -- $'msg\n'
+raw_byte_check 'stdin/lf-appended'     'X'           "X${_lf}"         -- "${DIE_BIN}"
+raw_byte_check 'stdin/-n-no-lf'        'X'           'X'               -- "${DIE_BIN}" -n
+raw_byte_check 'stdin/empty-default'   ''            "${_lf}"          -- "${DIE_BIN}"
+raw_byte_check 'stdin/empty-n-empty'   ''            ''                -- "${DIE_BIN}" -n
+raw_byte_check 'stdin/double-lf'       $'X\n\n'      "X${_lf}${_lf}"  -- "${DIE_BIN}"
 
 # ---------- error / usage ----------
 # Error message text is implementation-detail. We only assert: exit=1, stdout

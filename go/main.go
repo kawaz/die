@@ -9,10 +9,8 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"strings"
 )
 
@@ -30,8 +28,6 @@ Usage:
 Options:
   --sep STR       Joiner between ARGS, default " "
   --trim MODE     Whitespace handling: each (default) | all | none
-  --eol MODE      End-of-line for the appended terminator:
-                  auto (default; CRLF on Windows, LF elsewhere) | lf | crlf
   -n              Disable trailing-LF normalization (stdin path)
 
 Behavior:
@@ -50,7 +46,6 @@ func main() {
 func run(args []string, stdin io.Reader, stderr io.Writer) int {
 	sep := " "
 	trim := "each"
-	eol := defaultEOL()
 	normalize := true
 
 	// Phase 1: parse opts (everything before "--"). Any non-opt token before
@@ -83,7 +78,7 @@ func run(args []string, stdin io.Reader, stderr io.Writer) int {
 			}
 			mode, ok := parseTrim(args[i+1])
 			if !ok {
-				return usageErr(stderr, fmt.Sprintf("--trim must be each|all|none, got %q", args[i+1]))
+				return usageErr(stderr, "--trim must be each|all|none, got "+quoteArg(args[i+1]))
 			}
 			trim = mode
 			i += 2
@@ -91,37 +86,19 @@ func run(args []string, stdin io.Reader, stderr io.Writer) int {
 			raw := strings.TrimPrefix(a, "--trim=")
 			mode, ok := parseTrim(raw)
 			if !ok {
-				return usageErr(stderr, fmt.Sprintf("--trim must be each|all|none, got %q", raw))
+				return usageErr(stderr, "--trim must be each|all|none, got "+quoteArg(raw))
 			}
 			trim = mode
 			i++
-		case a == "--eol":
-			if i+1 >= len(args) {
-				return usageErr(stderr, "--eol requires a value")
-			}
-			e, ok := parseEOL(args[i+1])
-			if !ok {
-				return usageErr(stderr, fmt.Sprintf("--eol must be auto|lf|crlf, got %q", args[i+1]))
-			}
-			eol = e
-			i += 2
-		case strings.HasPrefix(a, "--eol="):
-			raw := strings.TrimPrefix(a, "--eol=")
-			e, ok := parseEOL(raw)
-			if !ok {
-				return usageErr(stderr, fmt.Sprintf("--eol must be auto|lf|crlf, got %q", raw))
-			}
-			eol = e
-			i++
 		default:
-			return usageErr(stderr, fmt.Sprintf("unknown option or missing -- before ARGS: %q", a))
+			return usageErr(stderr, "unknown option or missing -- before ARGS: "+quoteArg(a))
 		}
 	}
 
 	// ARG path: anything after "--", including zero args.
 	if sawDashDash {
 		out := joinArgs(rest, sep, trim)
-		out = appendEOL(out, normalize, eol)
+		out = appendLF(out, normalize)
 		_, _ = io.WriteString(stderr, out)
 		return exitFail
 	}
@@ -136,34 +113,12 @@ func run(args []string, stdin io.Reader, stderr io.Writer) int {
 	}
 	data, err := io.ReadAll(stdin)
 	if err != nil {
-		fmt.Fprintf(stderr, "die: reading stdin: %v\n", err)
+		_, _ = io.WriteString(stderr, "die: reading stdin: "+err.Error()+"\n")
 		return exitFail
 	}
-	out := appendEOLBytes(data, normalize, eol)
+	out := appendLFBytes(data, normalize)
 	_, _ = stderr.Write(out)
 	return exitFail
-}
-
-// parseEOL returns the resolved 2-character (or 1-character) terminator,
-// translating auto into the build-time platform default.
-func parseEOL(v string) (string, bool) {
-	switch v {
-	case "auto":
-		return defaultEOL(), true
-	case "lf":
-		return "\n", true
-	case "crlf":
-		return "\r\n", true
-	default:
-		return "", false
-	}
-}
-
-func defaultEOL() string {
-	if runtime.GOOS == "windows" {
-		return "\r\n"
-	}
-	return "\n"
 }
 
 func parseTrim(v string) (string, bool) {
@@ -189,10 +144,9 @@ func joinArgs(args []string, sep, trim string) string {
 		return strings.Join(parts, sep)
 	case "all":
 		return trimASCII(strings.Join(args, sep))
-	case "none":
+	default: // "none" or any future value: join as-is
 		return strings.Join(args, sep)
 	}
-	return strings.Join(args, sep)
 }
 
 func trimASCII(s string) string {
@@ -207,40 +161,45 @@ func isASCIIWhitespace(r rune) bool {
 	return false
 }
 
-// appendEOL appends `eol` to s if normalisation is enabled AND s does not
-// already end with LF or CRLF. Pre-existing terminators are left alone — `eol`
-// only controls which terminator is appended to an unterminated input.
-func appendEOL(s string, normalize bool, eol string) string {
+// appendLF appends "\n" to s if normalisation is enabled AND s does not
+// already end with LF. Pre-existing terminators are left alone.
+func appendLF(s string, normalize bool) string {
 	if !normalize {
 		return s
 	}
-	if endsWithEOL(s) {
+	if endsWithLF(s) {
 		return s
 	}
-	return s + eol
+	return s + "\n"
 }
 
-func appendEOLBytes(b []byte, normalize bool, eol string) []byte {
+func appendLFBytes(b []byte, normalize bool) []byte {
 	if !normalize {
 		return b
 	}
-	if bytesEndWithEOL(b) {
+	if bytesEndWithLF(b) {
 		return b
 	}
-	return append(b, eol...)
+	return append(b, '\n')
 }
 
-func endsWithEOL(s string) bool {
+func endsWithLF(s string) bool {
 	return len(s) > 0 && s[len(s)-1] == '\n'
 }
 
-func bytesEndWithEOL(b []byte) bool {
+func bytesEndWithLF(b []byte) bool {
 	return len(b) > 0 && b[len(b)-1] == '\n'
 }
 
 func usageErr(stderr io.Writer, msg string) int {
-	fmt.Fprintf(stderr, "die: %s\n", msg)
+	_, _ = io.WriteString(stderr, "die: "+msg+"\n")
 	return exitFail
+}
+
+// quoteArg wraps s in double quotes for error messages, matching %q but
+// without pulling in the fmt package.
+func quoteArg(s string) string {
+	return `"` + s + `"`
 }
 
 // isTTY reports whether r is a terminal. Only os.File is considered; any

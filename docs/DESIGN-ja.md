@@ -29,7 +29,6 @@ die [-n] <FILE
 |---|---|
 | `--sep STR` | ARGS を結合する区切り文字、default `" "` |
 | `--trim MODE` | ASCII whitespace 処理 (`each` / `all` / `none`)、default `each` |
-| `--eol MODE` | 補完する EOL (`auto` / `lf` / `crlf`)、default `auto` |
 | `-n` | 末尾 LF の自動補完を disable |
 
 `--trim` の MODE:
@@ -39,14 +38,6 @@ die [-n] <FILE
 - `none`: 何もしない
 
 `--trim` が消すのは ASCII whitespace 6 種 (SP, HT, LF, VT, FF, CR = POSIX `[[:space:]]`) のみ。NBSP や U+2028 等の Unicode whitespace は意図的に対象外 (= shell の常識的な空白観に倣う)。
-
-`--eol` の MODE (DR-0004):
-
-- `auto`: Windows ビルドなら CRLF、それ以外 LF (= build-time 判定)
-- `lf`: 常に `\n`
-- `crlf`: 常に `\r\n`
-
-`--eol` は LF normalisation で補う terminator だけを制御。既存の末尾 LF / CRLF は触らない (DR-0002 維持)、`-n` 指定時は normalisation 自体が off なので `--eol` は効果なし。
 
 ### 不変条件
 
@@ -69,6 +60,8 @@ die [-n] <FILE
 - stdin 経路: 同じ
 
 `cat` の「バイナリ安全 = 一切改変しない」とは要件が違う。`die` は「人が読む stderr」を一級要件にしており、ターミナルが行頭で揃わない事故を default で防ぐ。
+
+Windows では C runtime の text-mode default が stderr の `\n` を `\r\n` に自動変換する。die はこの変換に介入しない (Windows native CLI 慣習に従う)。`-n` は末尾 LF の補完を抑制するが、CRT の text-mode 変換はバイパスしない (die は表示ツールであり、byte 透過ツールではない)。
 
 ## 設計判断
 

@@ -22,7 +22,7 @@ die [-n] <FILE
 |---|---|
 | `--sep STR` | ARGS の区切り文字、default `" "` |
 | `--trim each\|all\|none` | whitespace 処理、default `each` |
-| `-n` | 末尾 LF 自動補完を disable (詳細は DR-0002) |
+| `-n` | 末尾 LF 自動補完を disable (詳細は DR-0002)。byte 透過ではない (DR-0005 参照) |
 
 ### 不変条件
 

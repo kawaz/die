@@ -25,7 +25,6 @@ die [-n] <FILE
 |---|---|
 | `--sep STR` | Joiner between ARGS, default `" "` |
 | `--trim MODE` | ASCII-whitespace handling (each / all / none), default `each` |
-| `--eol MODE` | Appended terminator (auto / lf / crlf), default `auto` |
 | `-n` | Disable trailing-LF normalization |
 
 ### Examples

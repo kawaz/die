@@ -2,8 +2,5 @@
   "is-main": true,
   "import": [
     "moonbitlang/core/env"
-  ],
-  "native-stub": [
-    "stub.c"
   ]
 }

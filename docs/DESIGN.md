@@ -29,7 +29,6 @@ die [-n] <FILE
 |---|---|
 | `--sep STR` | Joiner between ARGS, default `" "` |
 | `--trim MODE` | ASCII-whitespace handling (`each` / `all` / `none`), default `each` |
-| `--eol MODE` | Appended terminator (`auto` / `lf` / `crlf`), default `auto` |
 | `-n` | Disable trailing-LF normalization |
 
 `--trim` MODE:
@@ -39,14 +38,6 @@ die [-n] <FILE
 - `none`: no trimming
 
 `--trim` strips only the 6 ASCII whitespace bytes (SP, HT, LF, VT, FF, CR — POSIX `[[:space:]]`). Unicode whitespace such as NBSP or U+2028 is intentionally not stripped — the conventional shell view of whitespace is what we follow.
-
-`--eol` MODE (DR-0004):
-
-- `auto`: CRLF on Windows builds, LF elsewhere (build-time decision)
-- `lf`: always `\n`
-- `crlf`: always `\r\n`
-
-`--eol` controls only the terminator appended during LF normalisation; pre-existing trailing LF or CRLF is left alone, and `-n` disables normalisation entirely (so `--eol` becomes a no-op under `-n`).
 
 ### Invariants
 
@@ -69,6 +60,8 @@ Unless `-n` is passed, if the content does not end with LF, one is appended. Pre
 - stdin path: same
 
 This is intentionally different from `cat`, which is byte-safe. `die` is a first-class tool for human-readable stderr, so it defaults to preventing the case where the next shell prompt does not start on a new line.
+
+On Windows, the C runtime's text-mode default converts `\n` to `\r\n` on stderr — die does not intervene; that follows native Windows CLI convention. `-n` suppresses LF appending but does NOT bypass that conversion (die is a display tool, not byte-transparent).
 
 ## Design Decisions
 

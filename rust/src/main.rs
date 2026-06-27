@@ -1,6 +1,6 @@
 // die — write a message to stderr and exit 1.
 //
-// Spec: see ../../docs/DESIGN.md (and DR-0001 / DR-0002 / DR-0004).
+// Spec: see ../../docs/DESIGN.md (and DR-0001 / DR-0002 / DR-0005).
 
 use std::io::{self, Read, Write};
 use std::process::ExitCode;
@@ -15,10 +15,6 @@ Usage:
 Options:
   --sep STR       Joiner between ARGS, default \" \"
   --trim MODE     Whitespace (ASCII) handling: each (default) | all | none
-  --eol MODE      EOL appended when trailing newline is missing:
-                    auto (default) — CRLF on Windows builds, LF elsewhere
-                    lf             — always LF (\\n)
-                    crlf           — always CRLF (\\r\\n)
   -n              Disable trailing-newline normalization (stdin path)
 
 Behavior:
@@ -28,7 +24,6 @@ Behavior:
     trailing newline is appended unless -n is given.
   - On a TTY with no ARGS, this help is printed and exit 1.
   - --trim strips ASCII whitespace only (SP HT LF VT FF CR).
-  - --eol has no effect when -n is given.
 ";
 
 #[derive(Clone, Copy)]
@@ -38,41 +33,11 @@ enum Trim {
     None,
 }
 
-#[derive(Clone, Copy)]
-enum Eol {
-    Auto,
-    Lf,
-    Crlf,
-}
-
-/// Resolve --eol auto at build time.
-fn resolve_eol(eol: Eol) -> &'static [u8] {
-    match eol {
-        Eol::Lf => b"\n",
-        Eol::Crlf => b"\r\n",
-        Eol::Auto => {
-            #[cfg(windows)]
-            { b"\r\n" }
-            #[cfg(not(windows))]
-            { b"\n" }
-        }
-    }
-}
-
 fn parse_trim(s: &str) -> Option<Trim> {
     match s {
         "each" => Some(Trim::Each),
         "all" => Some(Trim::All),
         "none" => Some(Trim::None),
-        _ => None,
-    }
-}
-
-fn parse_eol(s: &str) -> Option<Eol> {
-    match s {
-        "auto" => Some(Eol::Auto),
-        "lf" => Some(Eol::Lf),
-        "crlf" => Some(Eol::Crlf),
         _ => None,
     }
 }
@@ -89,23 +54,23 @@ fn ascii_trim(s: &str) -> &str {
 }
 
 fn usage_err(msg: &str) -> ExitCode {
-    let _ = writeln!(io::stderr(), "die: {msg}");
+    let mut e = io::stderr();
+    let _ = e.write_all(b"die: ");
+    let _ = e.write_all(msg.as_bytes());
+    let _ = e.write_all(b"\n");
     ExitCode::from(1)
 }
 
 fn join_args(args: &[String], sep: &str, trim: Trim) -> String {
     match trim {
-        Trim::Each => {
-            let parts: Vec<&str> = args.iter().map(|a| ascii_trim(a)).collect();
-            parts.join(sep)
-        }
+        Trim::Each => args.iter().map(|a| ascii_trim(a)).collect::<Vec<_>>().join(sep),
         Trim::All => ascii_trim(&args.join(sep)).to_string(),
         Trim::None => args.join(sep),
     }
 }
 
-/// Append the resolved EOL terminator to a String if missing.
-fn append_eol_str(mut s: String, normalize: bool, eol: Eol) -> String {
+/// Append LF to a String if trailing newline is missing (DR-0002 invariant).
+fn append_lf_str(mut s: String, normalize: bool) -> String {
     if !normalize {
         return s;
     }
@@ -113,14 +78,12 @@ fn append_eol_str(mut s: String, normalize: bool, eol: Eol) -> String {
     if s.ends_with('\n') {
         return s;
     }
-    let term = resolve_eol(eol);
-    // SAFETY: term is always valid UTF-8 ("\n" or "\r\n").
-    s.push_str(std::str::from_utf8(term).unwrap());
+    s.push('\n');
     s
 }
 
-/// Append the resolved EOL terminator to bytes if missing.
-fn append_eol_bytes(mut b: Vec<u8>, normalize: bool, eol: Eol) -> Vec<u8> {
+/// Append LF to bytes if trailing newline is missing (DR-0002 invariant).
+fn append_lf_bytes(mut b: Vec<u8>, normalize: bool) -> Vec<u8> {
     if !normalize {
         return b;
     }
@@ -128,7 +91,7 @@ fn append_eol_bytes(mut b: Vec<u8>, normalize: bool, eol: Eol) -> Vec<u8> {
     if b.last() == Some(&b'\n') {
         return b;
     }
-    b.extend_from_slice(resolve_eol(eol));
+    b.push(b'\n');
     b
 }
 
@@ -175,26 +138,10 @@ unsafe fn win_is_char_device(handle: *mut std::ffi::c_void) -> bool {
     GetFileType(handle) == FILE_TYPE_CHAR
 }
 
-/// On Windows, switch stdin/stdout/stderr to binary mode so the C runtime
-/// does not mangle CRLF sequences.
-#[cfg(windows)]
-fn set_binary_mode() {
-    extern "C" {
-        fn _setmode(fd: i32, mode: i32) -> i32;
-    }
-    const _O_BINARY: i32 = 0x8000;
-    unsafe {
-        _setmode(0, _O_BINARY); // stdin
-        _setmode(1, _O_BINARY); // stdout
-        _setmode(2, _O_BINARY); // stderr
-    }
-}
-
-fn run(args: Vec<String>) -> ExitCode {
+fn run(mut args: Vec<String>) -> ExitCode {
     let mut sep = String::from(" ");
     let mut trim = Trim::Each;
     let mut normalize = true;
-    let mut eol = Eol::Auto;
 
     let mut saw_dash_dash = false;
     let mut rest: Vec<String> = Vec::new();
@@ -204,7 +151,7 @@ fn run(args: Vec<String>) -> ExitCode {
         let a = &args[i];
         if a == "--" {
             saw_dash_dash = true;
-            rest = args[i + 1..].to_vec();
+            rest = args.drain(i + 1..).collect();
             break;
         } else if a == "-n" {
             normalize = false;
@@ -227,7 +174,7 @@ fn run(args: Vec<String>) -> ExitCode {
                     trim = m;
                     i += 2;
                 }
-                None => return usage_err(&format!("--trim must be each|all|none, got \"{}\"", args[i + 1])),
+                None => return usage_err(&["--trim must be each|all|none, got \"", &args[i + 1], "\""].concat()),
             }
         } else if let Some(v) = a.strip_prefix("--trim=") {
             match parse_trim(v) {
@@ -235,36 +182,17 @@ fn run(args: Vec<String>) -> ExitCode {
                     trim = m;
                     i += 1;
                 }
-                None => return usage_err(&format!("--trim must be each|all|none, got \"{v}\"")),
-            }
-        } else if a == "--eol" {
-            if i + 1 >= args.len() {
-                return usage_err("--eol requires a value");
-            }
-            match parse_eol(&args[i + 1]) {
-                Some(m) => {
-                    eol = m;
-                    i += 2;
-                }
-                None => return usage_err(&format!("--eol must be auto|lf|crlf, got \"{}\"", args[i + 1])),
-            }
-        } else if let Some(v) = a.strip_prefix("--eol=") {
-            match parse_eol(v) {
-                Some(m) => {
-                    eol = m;
-                    i += 1;
-                }
-                None => return usage_err(&format!("--eol must be auto|lf|crlf, got \"{v}\"")),
+                None => return usage_err(&["--trim must be each|all|none, got \"", v, "\""].concat()),
             }
         } else {
-            return usage_err(&format!("unknown option or missing -- before ARGS: \"{a}\""));
+            return usage_err(&["unknown option or missing -- before ARGS: \"", a, "\""].concat());
         }
     }
 
     let mut stderr = io::stderr();
 
     if saw_dash_dash {
-        let out = append_eol_str(join_args(&rest, &sep, trim), normalize, eol);
+        let out = append_lf_str(join_args(&rest, &sep, trim), normalize);
         let _ = stderr.write_all(out.as_bytes());
         return ExitCode::from(1);
     }
@@ -276,18 +204,15 @@ fn run(args: Vec<String>) -> ExitCode {
     }
     let mut buf = Vec::new();
     if io::stdin().read_to_end(&mut buf).is_err() {
-        let _ = writeln!(stderr, "die: reading stdin failed");
+        let _ = stderr.write_all(b"die: reading stdin failed\n");
         return ExitCode::from(1);
     }
-    let out = append_eol_bytes(buf, normalize, eol);
+    let out = append_lf_bytes(buf, normalize);
     let _ = stderr.write_all(&out);
     ExitCode::from(1)
 }
 
 fn main() -> ExitCode {
-    #[cfg(windows)]
-    set_binary_mode();
-
     let args: Vec<String> = std::env::args().skip(1).collect();
     run(args)
 }

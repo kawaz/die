@@ -5,7 +5,7 @@
 - [DR-0001-spec-and-option-removal](./DR-0001-spec-and-option-removal.md) — 仕様確定 + option を撤廃した設計
 - [DR-0002-pipe-lf-normalization](./DR-0002-pipe-lf-normalization.md) — pipe 末尾改行 normalization の default on
 - [DR-0003-parallel-implementation-language](./DR-0003-parallel-implementation-language.md) — 実装言語の並行比較方針
-- [DR-0004-eol-option](./DR-0004-eol-option.md) — --eol auto/lf/crlf で末尾改行の方言を切替 (Windows サポート)
+- [DR-0005-drop-eol-option-respect-os-textmode](./DR-0005-drop-eol-option-respect-os-textmode.md) — --eol 廃止、OS text-mode 慣習に従う (Windows は CRT が \n→\r\n 自動変換)
 
 ## Archived
 
@@ -17,4 +17,4 @@
 
 ## Superseded
 
-<!-- 後続 DR に上書きされた DR (Status: Superseded by DR-XXXX) -->
+- [DR-0004-eol-option](./DR-0004-eol-option.md) — --eol auto/lf/crlf で末尾改行の方言を切替 (Superseded by DR-0005 2026-06-27)

@@ -1,6 +1,6 @@
 # DR-0004: --eol option (auto/lf/crlf) で末尾改行の方言を切替
 
-- Status: Active
+- Status: Superseded by DR-0005 (2026-06-27)
 - Date: 2026-06-27
 
 ## Context
