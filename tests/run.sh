@@ -1,11 +1,36 @@
 #!/usr/bin/env bash
 #
-# Shared behavioural test suite for `die`. Invoke with DIE_BIN pointing to a
-# built binary:
+# Shared behavioural test suite for `die` (e2e / black-box).
+# Invoke with DIE_BIN pointing to a built binary:
 #
 #   DIE_BIN=/path/to/go/bin/die tests/run.sh
 #
 # Exits 0 if every case passes, 1 otherwise.
+#
+# ============================================================================
+# Test responsibility split (kawaz, 2026-06-27):
+#   This suite covers what only e2e can measure:
+#     - CLI invocation (argv parsing, --, --sep, --trim, -n recognition)
+#     - stdin / stderr / exit-code wiring (pipe vs /dev/null vs TTY)
+#     - DR-0001 invariants: exit == 1 AND stdout empty, on every case
+#     - DR-0005 / DR-0006: OS-cross EOL behaviour
+#         * default mode: die writes deterministic bytes; the host C runtime
+#           text-mode layer may expand \n→\r\n (Windows MSVCRT). Both are
+#           spec-compliant — see expect_die_output's two-variant assertion.
+#         * -n mode: cat-equivalent, strict byte equality across all OSes.
+#     - ARG / stdin priority (ARG wins when both supplied)
+#     - error / usage paths (exit=1 + non-empty stderr + empty stdout)
+#
+#   Pure logic coverage is delegated to per-language unit tests:
+#     - trim_ascii (SP HT LF VT FF CR; Unicode whitespace untouched; empty,
+#       all-WS, interior-WS, multi-byte input boundaries)
+#     - join_args (0/1/N ARGs, --sep variations, empty ARGs)
+#     - append_lf  (\n/\r\n/\r/empty/no-tail input variants)
+#   The reason: language-internal logic does not change when running on
+#   different OSes or under different shells. e2e cases for it would just
+#   duplicate what a `go test` / `cargo test` / `moon test` / `zig test` run
+#   already verifies more precisely (and without quoting hazards).
+# ============================================================================
 set -uo pipefail
 
 DIE_BIN="${DIE_BIN:-${1:-}}"
