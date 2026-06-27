@@ -275,6 +275,23 @@ loose_eol_check() {
 # Either is spec-compliant per DR-0005 / DR-0006: die only commits to the
 # die-controlled byte string; the host runtime's text-mode layer may expand
 # \n to \r\n on Windows, and that is allowed.
+# crt_expand BYTES → bytes with every \n that isn't already preceded by \r
+# replaced with \r\n. Emulates Windows MSVCRT _write text-mode behaviour.
+# Pure bash (no sed/awk) for portability across BSD/GNU/MSYS coreutils.
+crt_expand() {
+    local in=$1 out='' prev='' i ch
+    for (( i = 0; i < ${#in}; i++ )); do
+        ch=${in:i:1}
+        if [ "$ch" = $'\n' ] && [ "$prev" != $'\r' ]; then
+            out+=$'\r\n'
+        else
+            out+=$ch
+        fi
+        prev=$ch
+    done
+    printf '%s' "$out"
+}
+
 expect_die_output() {
     local name=$1 stdin_data=$2 expected_die=$3
     shift 3
@@ -286,12 +303,7 @@ expect_die_output() {
     _run_raw_capture "$tmp" "${stdin_data}" -- "$@"
     local got; got=$(od -An -c "$tmp" | tr -d ' \n')
     local want_native; want_native=$(printf '%s' "${expected_die}" | od -An -c | tr -d ' \n')
-    # Compute the "CRT-expanded" variant: every \n NOT preceded by \r becomes \r\n.
-    # bash 3.2-compatible sed: do the transform on the raw bytes.
-    local want_crt
-    want_crt=$(printf '%s' "${expected_die}" \
-        | sed $'s/\\([^\r]\\)\n/\\1\r\n/g; s/^\n/\r\n/' \
-        | od -An -c | tr -d ' \n')
+    local want_crt; want_crt=$(crt_expand "${expected_die}" | od -An -c | tr -d ' \n')
     rm -f "$tmp"
     if [ "${got}" = "${want_native}" ] || [ "${got}" = "${want_crt}" ]; then
         pass=$((pass + 1))
