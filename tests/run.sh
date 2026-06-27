@@ -106,8 +106,19 @@ STDIN_DATA=''
 run_case 'stdin/empty-becomes-lf'       1 '' ''            -- "${DIE_BIN}"
 # stdin/double-lf-preserved: bash $() strips ALL trailing LFs from cmd substitution
 # so this case is verified via raw/stdin/double-lf below (raw byte comparison).
-STDIN_DATA=$'X\r\n'
-run_case 'stdin/crlf-treated-as-lf'     1 '' $'X\r'        -- "${DIE_BIN}"
+# stdin/crlf-treated-as-lf: on Windows runners (Git Bash) the pipe transport
+# strips \r before it reaches the child stdin, so this case can only be
+# validated on POSIX hosts. Skip with a recorded reason rather than papering
+# over it with a soft assertion (see [[test-failure-no-tampering]]).
+case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+        echo "  SKIP  stdin/crlf-treated-as-lf  (Git Bash pipe strips \\r before child stdin)"
+        ;;
+    *)
+        STDIN_DATA=$'X\r\n'
+        run_case 'stdin/crlf-treated-as-lf' 1 '' $'X\r'    -- "${DIE_BIN}"
+        ;;
+esac
 
 # -n disables normalisation
 STDIN_DATA='X'
@@ -160,6 +171,29 @@ raw_byte_check 'stdin/-n-no-lf'        'X'           'X'              -- "${DIE_
 raw_byte_check 'stdin/empty-default'   ''            $'\n'            -- "${DIE_BIN}"
 raw_byte_check 'stdin/empty-n-empty'   ''            ''               -- "${DIE_BIN}" -n
 raw_byte_check 'stdin/double-lf'       $'X\n\n'      $'X\n\n'         -- "${DIE_BIN}"
+
+# ---------- DR-0004: --eol auto|lf|crlf ----------
+# --eol affects ONLY the terminator appended during normalisation. Existing
+# trailing LF / CRLF is left alone (DR-0002 invariant preserved). -n still
+# disables normalisation entirely. --eol auto is build-time/host-dependent
+# (Windows → CRLF, otherwise → LF) and is therefore tested via lf/crlf only.
+raw_byte_check 'arg/eol-lf-explicit'   '__NOSTDIN__' $'msg\n'         -- "${DIE_BIN}" --eol lf   -- 'msg'
+raw_byte_check 'arg/eol-crlf-explicit' '__NOSTDIN__' $'msg\r\n'       -- "${DIE_BIN}" --eol crlf -- 'msg'
+# Note: with --trim each (default), trailing LF/CRLF in a single ARG is
+# stripped *before* EOL append, so we cannot exercise "no-dup on LF tail"
+# via the ARG path. Use --trim none to preserve the existing terminator.
+raw_byte_check 'arg/eol-crlf-no-dup-on-lf-tail'    '__NOSTDIN__' $'msg\n'   -- "${DIE_BIN}" --trim none --eol crlf -- $'msg\n'
+raw_byte_check 'arg/eol-crlf-no-dup-on-crlf-tail'  '__NOSTDIN__' $'msg\r\n' -- "${DIE_BIN}" --trim none --eol crlf -- $'msg\r\n'
+
+raw_byte_check 'stdin/eol-lf-explicit'   'X'           $'X\n'         -- "${DIE_BIN}" --eol lf
+raw_byte_check 'stdin/eol-crlf-explicit' 'X'           $'X\r\n'       -- "${DIE_BIN}" --eol crlf
+raw_byte_check 'stdin/eol-crlf-empty'    ''            $'\r\n'        -- "${DIE_BIN}" --eol crlf
+raw_byte_check 'stdin/eol-crlf-no-dup-on-lf-tail'    $'X\n'   $'X\n'    -- "${DIE_BIN}" --eol crlf
+raw_byte_check 'stdin/eol-crlf-no-dup-on-crlf-tail'  $'X\r\n' $'X\r\n'  -- "${DIE_BIN}" --eol crlf
+
+# -n overrides --eol (no appending at all)
+raw_byte_check 'stdin/-n-with-eol-crlf-still-empty' 'X' 'X'           -- "${DIE_BIN}" -n --eol crlf
+raw_byte_check 'arg/-n-with-eol-crlf-still-empty'   '__NOSTDIN__' 'msg' -- "${DIE_BIN}" -n --eol crlf -- 'msg'
 
 # ---------- error / usage ----------
 # Error message text is implementation-detail. We only assert: exit=1, stdout

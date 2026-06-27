@@ -125,8 +125,7 @@ jobs:
         run: |
           moon build --target native --release
           mkdir -p bin
-          # Path is finalised by the mbt subagent; this echo helps diagnose.
-          find . -name 'main.exe' -o -name 'die' | head
+          cp _build/native/release/build/main/main.exe bin/die
       - name: e2e tests
         run: DIE_BIN="$PWD/mbt/bin/die" bash tests/run.sh
       - name: upload binary
