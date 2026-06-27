@@ -78,27 +78,46 @@ fn append_lf_bytes(mut b: Vec<u8>, normalize: bool) -> Vec<u8> {
 }
 
 fn is_stdin_tty() -> bool {
-    // unix-only; die ships for posix-like targets.
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
         let fd = io::stdin().as_raw_fd();
         // SAFETY: isatty(3) is signal-safe and side-effect-free.
-        unsafe { libc_isatty(fd) }
+        unsafe { unix_isatty(fd) }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        let h = io::stdin().as_raw_handle();
+        // SAFETY: GetFileType is signal-safe and side-effect-free.
+        unsafe { win_is_char_device(h) }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         false
     }
 }
 
 #[cfg(unix)]
-unsafe fn libc_isatty(fd: i32) -> bool {
+unsafe fn unix_isatty(fd: i32) -> bool {
     // Avoid pulling in the `libc` crate dependency for one function.
     extern "C" {
         fn isatty(fd: i32) -> i32;
     }
     isatty(fd) != 0
+}
+
+#[cfg(windows)]
+unsafe fn win_is_char_device(handle: *mut std::ffi::c_void) -> bool {
+    // GetFileType on a console handle returns FILE_TYPE_CHAR (0x0002); pipes
+    // and disk files report FILE_TYPE_PIPE / FILE_TYPE_DISK. This matches
+    // isatty semantics closely enough for our "ARGS empty + stdin TTY → help"
+    // branch on Windows.
+    extern "system" {
+        fn GetFileType(handle: *mut std::ffi::c_void) -> u32;
+    }
+    const FILE_TYPE_CHAR: u32 = 0x0002;
+    GetFileType(handle) == FILE_TYPE_CHAR
 }
 
 fn run(args: Vec<String>) -> ExitCode {
