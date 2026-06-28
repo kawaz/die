@@ -204,8 +204,13 @@ jobs:
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet -- Formula/die.rb; then
-            git add Formula/die.rb
+          # Stage first, then check whether the index has changes.
+          # `git diff --quiet -- Formula/die.rb` ignores untracked files,
+          # so on the very first release the formula would be silently
+          # skipped. `git diff --cached --quiet` after `git add` correctly
+          # covers both new and modified cases.
+          git add Formula/die.rb
+          if ! git diff --cached --quiet -- Formula/die.rb; then
             git commit -m "Update die to ${VERSION}"
             git push
           else
