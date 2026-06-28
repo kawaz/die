@@ -84,6 +84,18 @@ fn isStdinTty() bool {
     }
 }
 
+// Windows: map POSIX fd (0/1/2) to STD_INPUT/OUTPUT/ERROR_HANDLE constants.
+// Returns null for any other fd (Windows GetStdHandle has no concept of
+// arbitrary fd numbers). Shared between windowsIsTty and windowsIsCygwinTty.
+fn stdHandleId(fd: i32) ?u32 {
+    return switch (fd) {
+        0 => @bitCast(@as(i32, -10)), // STD_INPUT_HANDLE
+        1 => @bitCast(@as(i32, -11)), // STD_OUTPUT_HANDLE
+        2 => @bitCast(@as(i32, -12)), // STD_ERROR_HANDLE
+        else => null,
+    };
+}
+
 // Windows: native console detection.
 fn windowsIsTty(fd: i32) bool {
     if (comptime builtin.target.os.tag != .windows) return false;
@@ -94,15 +106,8 @@ fn windowsIsTty(fd: i32) bool {
         extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.c) HANDLE;
         extern "kernel32" fn GetConsoleMode(hConsoleHandle: HANDLE, lpMode: *DWORD) callconv(.c) BOOL;
     };
-    // STD_INPUT_HANDLE = (DWORD)-10; we pass fd as an index but Windows
-    // requires the named constant. Map fd -> the right constant.
-    const std_handle_id: u32 = switch (fd) {
-        0 => @bitCast(@as(i32, -10)), // STD_INPUT_HANDLE
-        1 => @bitCast(@as(i32, -11)), // STD_OUTPUT_HANDLE
-        2 => @bitCast(@as(i32, -12)), // STD_ERROR_HANDLE
-        else => return false,
-    };
-    const h = W.GetStdHandle(std_handle_id);
+    const id = stdHandleId(fd) orelse return false;
+    const h = W.GetStdHandle(id);
     var mode: W.DWORD = 0;
     return W.GetConsoleMode(h, &mode) != 0;
 }
@@ -132,13 +137,8 @@ fn windowsIsCygwinTty(fd: i32) bool {
             ReturnLength: ?*ULONG,
         ) callconv(.c) NTSTATUS;
     };
-    const std_handle_id: u32 = switch (fd) {
-        0 => @bitCast(@as(i32, -10)),
-        1 => @bitCast(@as(i32, -11)),
-        2 => @bitCast(@as(i32, -12)),
-        else => return false,
-    };
-    const h = W.GetStdHandle(std_handle_id);
+    const id = stdHandleId(fd) orelse return false;
+    const h = W.GetStdHandle(id);
     if (W.GetFileType(h) != W.FILE_TYPE_PIPE) return false;
 
     // OBJECT_NAME_INFORMATION layout:
