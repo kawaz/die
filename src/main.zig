@@ -10,6 +10,11 @@ const builtin = @import("builtin");
 const mem = std.mem;
 const process = std.process;
 
+// Embed build.zig.zon's .version at compile time so `die --version` always
+// reflects the canonical version source (single source of truth at repo root).
+// The "zon" module is wired in build.zig (root_module.addAnonymousImport).
+const VERSION: []const u8 = @import("zon").version;
+
 // ---- POSIX extern declarations -------------------------------------------
 
 extern fn write(fd: i32, buf: [*]const u8, count: usize) isize;
@@ -215,21 +220,27 @@ const HELP =
     \\  die [opts] -- ARGS...
     \\  die [-n] <FILE
     \\  die --help
+    \\  die --version
     \\
     \\Options:
     \\  --sep STR       Joiner between ARGS, default " "
     \\  --trim MODE     Whitespace handling: each (default) | all | none
     \\  -n              Disable trailing-LF normalization (stdin path)
-    \\  --help          Show this help and exit 1 (must appear before --)
+    \\  --help          Show this help and exit 0 (must appear before --)
+    \\  --version       Print "die <version>" and exit 0 (must appear before --)
     \\
     \\Behavior:
-    \\  - Output is always stderr, exit code is always 1.
+    \\  - Output is always stderr.
+    \\  - Exit code is 1 for die's normal operation (ARG / stdin paths) and
+    \\    for any usage error; 0 only for explicit --help / --version queries.
     \\  - "--" is required when ARGS are present.
     \\  - With no ARGS and stdin not a TTY (pipe / file / /dev/null / socket),
     \\    stdin is forwarded to stderr; a missing trailing LF is appended
     \\    unless -n is given.
-    \\  - With no ARGS and stdin IS a TTY, this help is printed and exit 1.
-    \\  - "--help" before "--" prints this help. After "--" it is an ARG.
+    \\  - With no ARGS and stdin IS a TTY, this help is printed and exit 1
+    \\    (usage error — distinct from the explicit --help query above).
+    \\  - "--help" / "--version" before "--" trigger that option.
+    \\    After "--" they are treated as ARGs (literal echo).
     \\
 ;
 
@@ -469,8 +480,16 @@ pub fn main(init: process.Init.Minimal) noreturn {
             i += 1;
             break;
         } else if (mem.eql(u8, a, "--help")) {
+            // Explicit meta query: user asked for help → success (exit 0).
+            // Differs from the bare-TTY fallback below, which is a usage
+            // error and stays exit 1. (DR-0008 refined.)
             writeAll(STDERR, HELP);
-            process.exit(1);
+            process.exit(0);
+        } else if (mem.eql(u8, a, "--version")) {
+            writeAll(STDERR, "die ");
+            writeAll(STDERR, VERSION);
+            writeAll(STDERR, "\n");
+            process.exit(0);
         } else if (mem.eql(u8, a, "-n")) {
             normalize = false;
             i += 1;

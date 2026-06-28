@@ -153,7 +153,7 @@ echo "== running TTY-path tests against ${DIE_BIN} =="
 tty_case 'tty/no-dash-dash-tty-stdin-help' 1 1 'Usage:' -- "${DIE_BIN}"
 
 # `die --help` under a TTY also emits the full help text.
-tty_case 'tty/help-option-under-tty'       1 1 'Usage:' -- "${DIE_BIN}" --help
+tty_case 'tty/help-option-under-tty'       0 1 'Usage:' -- "${DIE_BIN}" --help
 
 # DR-0008: `--` present + stdin TTY → ARG path (TTY is ignored, ARGS win).
 # Output is the ARG bytes, NOT help — so stderr must NOT contain "Usage:".
