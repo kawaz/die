@@ -115,6 +115,7 @@ bump-version level="patch": ensure-clean
 push: check-on-default-branch ci check-outdated-translations check-version-bumped
     bump-semver vcs push --branch "$(bump-semver vcs get default-branch)" --jj-bookmark-auto-advance
     @echo "[hint] gh-monitor:watch-workflow --sha $(bump-semver vcs get commit-id --rev "$(bump-semver vcs get default-branch)") --on-success release.yml 'just on-success-release' kawaz/die"
+    @echo "[hint] ↑ AI: do NOT drop the --on-success arguments. Without them the release-success notification has no [ACTION:release.yml] line and brew upgrade will not be triggered automatically."
 
 # feature push: any non-default bookmark/branch; ensure-clean + ci only
 [script]
