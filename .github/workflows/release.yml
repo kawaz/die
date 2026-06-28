@@ -1,7 +1,9 @@
 name: Release
 
 # build.zig.zon の .version 変更を trigger に release を自動生成 (Zig native の慣習):
-#   1. check-version: zon から version 抽出 + 旧 tag より大きいか (二重 release 防止)
+#   1. check-version: zon から version 抽出 + 既存 release/tag の semver 最大値より
+#      厳密に大きいか確認 (= downgrade / 重複 / 取りこぼし 防止)。bump-semver を
+#      使い「new > latest-release」AND「new > latest-tag (tag があれば)」を gate。
 #   2. build: cross-compile matrix で各 target binary を作成
 #   3. release: gh release create でタグ + Release 作成 + binary 添付
 #   4. update-homebrew: kawaz/homebrew-tap に formula を自動更新
@@ -30,6 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install bump-semver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Linux runner なので linux-amd64 を直接 release から取る (= brew より軽い)
+          gh release download --repo kawaz/bump-semver --pattern bump-semver-linux-amd64 -O /usr/local/bin/bump-semver
+          chmod +x /usr/local/bin/bump-semver
+          bump-semver --version
+
       - name: Check version change
         id: version
         env:
@@ -38,24 +50,50 @@ jobs:
         run: |
           set -euo pipefail
           # build.zig.zon の .version = "X.Y.Z" を抽出
-          CURRENT=$(grep -E '^\s*\.version\s*=' build.zig.zon | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          CURRENT=$(bump-semver get build.zig.zon)
           echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
 
-          # 0.0.x プレースホルダ (= 初期未リリース状態) はスキップ
+          # 0.0.0 プレースホルダ (= 初期未リリース状態) はスキップ
           if [ -z "$CURRENT" ] || [ "$CURRENT" = "0.0.0" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Placeholder version (${CURRENT:-empty}); skipping release."
             exit 0
           fi
 
-          # 既存 release との重複チェック
-          if gh release view "v${CURRENT}" --repo "$REPO" >/dev/null 2>&1; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Version unchanged: v${CURRENT} already released"
+          # 既存 release / tag の semver 最大値より厳密に大きいか確認。
+          # latest-release: GH Release の semver 最大 (= "Latest" 印は時系列
+          # なので semver 最大とは限らない、bump-semver は semver で判定する)。
+          # latest-tag: git tag (origin) の semver 最大、tag 不在なら exit 3。
+          # 両方 (取得できる範囲で) 上回ることを要求 = downgrade / 抜け道なし。
+          FAIL=0
+
+          if LATEST_REL=$(bump-semver vcs get latest-release --repository "$REPO" 2>/dev/null); then
+            echo "latest-release: ${LATEST_REL}"
+            if ! bump-semver compare gt "$CURRENT" "$LATEST_REL"; then
+              echo "::error::v${CURRENT} is not greater than latest GH release v${LATEST_REL}"
+              FAIL=1
+            fi
           else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "New version detected: v${CURRENT}"
+            echo "latest-release: (none yet)"
           fi
+
+          if LATEST_TAG=$(bump-semver vcs get latest-tag 2>/dev/null); then
+            echo "latest-tag: ${LATEST_TAG}"
+            if ! bump-semver compare gt "$CURRENT" "$LATEST_TAG"; then
+              echo "::error::v${CURRENT} is not greater than latest git tag v${LATEST_TAG}"
+              FAIL=1
+            fi
+          else
+            echo "latest-tag: (none yet)"
+          fi
+
+          if [ "$FAIL" = "1" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "New version detected: v${CURRENT} (passes both gates)"
 
   build:
     needs: check-version
