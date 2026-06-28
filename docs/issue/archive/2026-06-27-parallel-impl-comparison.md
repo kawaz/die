@@ -1,6 +1,6 @@
 ---
 title: 並行実装 + 比較検討 (Go / Rust / MoonBit / Zig)
-status: pending-sublimation
+status: resolved
 category: task
 created: 2026-06-27T11:19:13+09:00
 last_read: 2026-06-27T12:25:33+09:00
@@ -9,10 +9,10 @@ wip_entered:
 blocked_entered:
 pending_entered: 2026-06-27T12:26:14+09:00
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-06-28T14:01:21+09:00
 discard_reason:
 pending_reason: ["4言語並行実装と計測完了 (Go/Rust/MoonBit/Zig 全て 38/38 tests pass、binary size + cold start 計測済 + findings に記録)。残り作業は kawaz の採用判断 + dogfood 経過待ち + 他実装削除 + homebrew tap 統合。詳細: finding/2026-06-27-language-comparison"]
-close_reason:
+close_reason: ["dr/DR-0007","implemented","finding/2026-06-27-final-recommendation"]
 blocked_by:
 origin: 自リポ TODO
 ---
