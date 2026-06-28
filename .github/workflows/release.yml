@@ -152,6 +152,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          # Deterministic ordering (sort) so the manifest is reproducible.
+          # Format = GNU coreutils `sha256sum` output (= "<hash>  <filename>"),
+          # verifiable on any host with `sha256sum -c SHA256SUMS`.
+          sha256sum die-* | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
       - name: Create release with tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -166,7 +174,7 @@ jobs:
             --title "v${VERSION}" \
             --target "$COMMIT_SHA" \
             --generate-notes \
-            die-*
+            die-* SHA256SUMS
 
   update-homebrew:
     needs: [check-version, release]
