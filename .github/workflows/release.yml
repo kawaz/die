@@ -152,14 +152,23 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - name: Generate SHA256SUMS
+      - name: Generate per-binary .sha256
         run: |
           set -euo pipefail
-          # Deterministic ordering (sort) so the manifest is reproducible.
+          # Per-binary <name>.sha256 sidecar files (one per artifact).
           # Format = GNU coreutils `sha256sum` output (= "<hash>  <filename>"),
-          # verifiable on any host with `sha256sum -c SHA256SUMS`.
-          sha256sum die-* | sort -k2 > SHA256SUMS
-          cat SHA256SUMS
+          # so the user can verify a single binary with:
+          #   sha256sum -c die-linux-amd64.sha256
+          # Picked over a single SHA256SUMS manifest because most users only
+          # need to verify the one binary they downloaded for their platform,
+          # not the whole release; pairing each binary with its own .sha256
+          # keeps that the cheap path. Matches the convention used by
+          # ripgrep / starship / zellij.
+          for f in die-*; do
+            [ -f "$f" ] || continue
+            sha256sum "$f" > "${f}.sha256"
+          done
+          ls -lh die-*.sha256
       - name: Create release with tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -174,7 +183,7 @@ jobs:
             --title "v${VERSION}" \
             --target "$COMMIT_SHA" \
             --generate-notes \
-            die-* SHA256SUMS
+            die-*
 
   update-homebrew:
     needs: [check-version, release]
