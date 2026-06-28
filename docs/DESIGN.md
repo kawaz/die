@@ -21,6 +21,7 @@ By shipping it as a **single OS binary**, `brew install die` makes it available 
 ```
 die [opts] -- ARGS...
 die [-n] <FILE
+die --help
 ```
 
 ### Options
@@ -30,6 +31,7 @@ die [-n] <FILE
 | `--sep STR` | Joiner between ARGS, default `" "` |
 | `--trim MODE` | ASCII-whitespace handling (`each` / `all` / `none`), default `each` |
 | `-n` | Disable LF normalization (= cat equivalent byte-transparent output) |
+| `--help` | Show help to stderr and exit 1. Must appear before `--`; after `--` it is treated as an ARG (literal `--help`). |
 
 `--trim` MODE:
 
@@ -48,9 +50,17 @@ die [-n] <FILE
 
 ### stdin handling
 
-- ARGS empty + stdin is a pipe / redirect → read stdin and forward to stderr
-- ARGS supplied + stdin also supplied → ARGS take priority; stdin is ignored (tolerant default)
-- ARGS empty + stdin is a TTY → emit help to stderr and exit 1
+Branch is decided by `--` presence and (when no `--`) by stdin TTY classification:
+
+- ARGS supplied (= `--` present) → ARG path. stdin is ignored even if piped.
+- ARGS empty (= no `--`) + stdin is NOT a TTY → forward stdin to stderr. "Not a TTY" covers anonymous pipes, named FIFOs, regular files, char devices (`/dev/null`, `/dev/zero`, …), sockets (process substitution), and block devices. `/dev/null` is forwarded as empty input and gets a single `\n` via the normalize rule.
+- ARGS empty (= no `--`) + stdin IS a TTY → emit help to stderr and exit 1.
+
+TTY detection (see [DR-0008](./decisions/DR-0008-stdin-tty-routing-and-help-option.md) and [findings/2026-06-28-tty-detection-cross-os.md](./findings/2026-06-28-tty-detection-cross-os.md)):
+
+- POSIX: `isatty(3)` (= `ioctl(TCGETS)` / `TIOCGETA`).
+- Windows: `GetConsoleMode()` on the std handle. MSVCRT `_isatty()` is intentionally NOT used — it lies about NUL device (reports it as a terminal).
+- Cygwin / MSYS2 / Git Bash pty: named-pipe name pattern match (`\msys-…-ptyN-…`) via `NtQueryObject`, so `die` typed bare at a Git Bash prompt also shows help.
 
 ### Trailing LF normalization
 
@@ -87,7 +97,12 @@ Defaults don't need explicit forms — not writing the option is the same. Addin
 
 ### Help
 
-When `die` is invoked with no ARGS and stdin is a TTY, help is emitted to stderr (with exit 1). A separate `--help` is intentionally not provided: by removing option parsing entirely, the user can freely pass strings like `--help` as ARGs (e.g. in an error message that mentions "see --help for details") without conflict.
+Two paths emit the same help:
+
+1. `die` with no ARGS and stdin is a TTY → help to stderr, exit 1.
+2. `--help` option placed before `--` → same help, regardless of stdin state, exit 1.
+
+DR-0001's "after `--` anything passes safely" property is preserved: `die -- --help` echoes literal "--help" to stderr (= treated as an ARG). See [DR-0008](./decisions/DR-0008-stdin-tty-routing-and-help-option.md).
 
 ### Why explain "pipe-context LF appending differs from cat"
 

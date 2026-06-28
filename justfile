@@ -57,12 +57,16 @@ build:
     cp zig-out/bin/die bin/die
     ls -lh bin/die
 
-# e2e tests via the shared shell suite
+# e2e tests via the shared shell suite (non-TTY paths)
 test: build
     DIE_BIN="$PWD/bin/die" tests/run.sh
 
-# CI entry point: lint + unit + build + e2e
-ci: lint unit build test
+# TTY-path e2e tests via python pty (skips if python3/pty unavailable)
+test-tty: build
+    DIE_BIN="$PWD/bin/die" tests/tty.sh
+
+# CI entry point: lint + unit + build + e2e + tty
+ci: lint unit build test test-tty
 
 # ---------- gates (used by `just push`; rarely invoked directly) ----------
 

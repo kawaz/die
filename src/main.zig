@@ -1,6 +1,6 @@
 // die — write a message to stderr and exit 1.
 //
-// Spec: see ../../docs/DESIGN.md (and DR-0001 / DR-0002 / DR-0005).
+// Spec: see ../../docs/DESIGN.md (and DR-0001 / DR-0002 / DR-0005 / DR-0008).
 //
 // Uses raw POSIX extern calls for I/O to bypass Zig 0.16.0's new async Io API.
 // Uses std.process.Init.Minimal for argv access (Zig 0.16.0 new main signature).
@@ -14,10 +14,17 @@ const process = std.process;
 
 extern fn write(fd: i32, buf: [*]const u8, count: usize) isize;
 extern fn read(fd: i32, buf: [*]u8, count: usize) isize;
-extern fn isatty(fd: i32) c_int;
 extern fn malloc(size: usize) ?*anyopaque;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
+
+// POSIX isatty(3): wraps ioctl(TCGETS) or ioctl(TIOCGETA). Returns nonzero if
+// fd is a terminal. Linked from libc on POSIX targets only.
+const posix_isatty = if (builtin.target.os.tag != .windows)
+    struct {
+        extern fn isatty(fd: i32) c_int;
+    }.isatty
+else {};
 
 // ---- Windows _setmode for binary / cat-equivalent output under -n --------
 //
@@ -44,6 +51,161 @@ const STDIN: i32 = 0;
 const STDOUT: i32 = 1;
 const STDERR: i32 = 2;
 
+// ---- stdin TTY detection (DR-0008) ---------------------------------------
+//
+// Returns true if STDIN is connected to a real terminal.
+//
+// POSIX: standard isatty(3), which internally calls ioctl(fd, TCGETS) on
+// Linux or TIOCGETA on BSD/macOS. /dev/null, regular files, pipes, and
+// sockets all correctly return false.
+//
+// Windows: GetConsoleMode() on the underlying HANDLE; succeeds only for
+// real console handles (cmd.exe / PowerShell / Windows Terminal).
+// Critically, this returns false for the NUL device, unlike MSVCRT
+// _isatty() which lies and reports NUL as a TTY (a long-standing MSVCRT
+// design choice — every FILE_TYPE_CHAR is treated as terminal). Cygwin /
+// MSYS2 / Git Bash pty implementations are named pipes with a specific
+// naming pattern (\msys-…-ptyN-{from,to}-master / \cygwin-…-ptyN-…); we
+// match that pattern via NtQueryObject to classify them as TTY too, so
+// `die` typed bare at a Git Bash prompt shows help rather than waiting
+// for Ctrl-D on stdin.
+//
+// See docs/findings/2026-06-28-tty-detection-cross-os.md for background.
+fn isStdinTty() bool {
+    if (comptime builtin.target.os.tag == .windows) {
+        return windowsIsTty(STDIN) or windowsIsCygwinTty(STDIN);
+    } else {
+        return posix_isatty(STDIN) != 0;
+    }
+}
+
+// Windows: native console detection.
+fn windowsIsTty(fd: i32) bool {
+    if (comptime builtin.target.os.tag != .windows) return false;
+    const W = struct {
+        const HANDLE = *anyopaque;
+        const DWORD = u32;
+        const BOOL = c_int;
+        extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.c) HANDLE;
+        extern "kernel32" fn GetConsoleMode(hConsoleHandle: HANDLE, lpMode: *DWORD) callconv(.c) BOOL;
+    };
+    // STD_INPUT_HANDLE = (DWORD)-10; we pass fd as an index but Windows
+    // requires the named constant. Map fd -> the right constant.
+    const std_handle_id: u32 = switch (fd) {
+        0 => @bitCast(@as(i32, -10)), // STD_INPUT_HANDLE
+        1 => @bitCast(@as(i32, -11)), // STD_OUTPUT_HANDLE
+        2 => @bitCast(@as(i32, -12)), // STD_ERROR_HANDLE
+        else => return false,
+    };
+    const h = W.GetStdHandle(std_handle_id);
+    var mode: W.DWORD = 0;
+    return W.GetConsoleMode(h, &mode) != 0;
+}
+
+// Windows: Cygwin / MSYS2 pty detection. Cygwin ptys are named pipes whose
+// name matches `\{cygwin,msys}-XXXX-ptyN-{from,to}-master[-suffix]`. We
+// query the handle's name via NtQueryObject (ntdll) and pattern-match.
+// Modelled after mattn/go-isatty's IsCygwinTerminal.
+fn windowsIsCygwinTty(fd: i32) bool {
+    if (comptime builtin.target.os.tag != .windows) return false;
+    const W = struct {
+        const HANDLE = *anyopaque;
+        const DWORD = u32;
+        const NTSTATUS = i32;
+        const ULONG = u32;
+        const FILE_TYPE_PIPE: DWORD = 0x0003;
+        extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.c) HANDLE;
+        extern "kernel32" fn GetFileType(hFile: HANDLE) callconv(.c) DWORD;
+        // NtQueryObject(Handle, ObjectInformationClass, ObjectInformation,
+        //   ObjectInformationLength, ReturnLength)
+        // ObjectNameInformation = 1
+        extern "ntdll" fn NtQueryObject(
+            Handle: HANDLE,
+            ObjectInformationClass: u32,
+            ObjectInformation: ?*anyopaque,
+            ObjectInformationLength: ULONG,
+            ReturnLength: ?*ULONG,
+        ) callconv(.c) NTSTATUS;
+    };
+    const std_handle_id: u32 = switch (fd) {
+        0 => @bitCast(@as(i32, -10)),
+        1 => @bitCast(@as(i32, -11)),
+        2 => @bitCast(@as(i32, -12)),
+        else => return false,
+    };
+    const h = W.GetStdHandle(std_handle_id);
+    if (W.GetFileType(h) != W.FILE_TYPE_PIPE) return false;
+
+    // OBJECT_NAME_INFORMATION layout:
+    //   UNICODE_STRING Name;   // 16 bytes on x64 (USHORT Length, USHORT Max, PWSTR Buffer)
+    //   WCHAR NameBuffer[];    // follows inline
+    // We over-allocate a single byte buffer and reinterpret.
+    var buf: [4096]u8 align(@alignOf(usize)) = undefined;
+    var ret_len: u32 = 0;
+    const status = W.NtQueryObject(h, 1, &buf, buf.len, &ret_len);
+    if (status < 0) return false;
+
+    // Decode UNICODE_STRING.Length (USHORT, bytes) and Buffer (PWSTR).
+    const length_bytes: u16 = std.mem.readInt(u16, buf[0..2], .little);
+    if (length_bytes == 0) return false;
+    // Buffer pointer is at offset 8 on x64, 4 on x86. Use sizeof.
+    const ptr_offset: usize = @sizeOf(usize);
+    const buf_ptr_raw: usize = std.mem.readInt(usize, buf[ptr_offset..][0..@sizeOf(usize)], .little);
+    if (buf_ptr_raw == 0) return false;
+    // The buffer follows inline within `buf` for in-process query; pointer
+    // refers back to this same allocation. Compute offset from buf base.
+    const buf_base: usize = @intFromPtr(&buf);
+    if (buf_ptr_raw < buf_base or buf_ptr_raw >= buf_base + buf.len) return false;
+    const name_offset = buf_ptr_raw - buf_base;
+    if (name_offset + @as(usize, length_bytes) > buf.len) return false;
+    const name_wide: []const u16 = blk: {
+        const wide_ptr: [*]const u16 = @ptrCast(@alignCast(&buf[name_offset]));
+        break :blk wide_ptr[0 .. length_bytes / 2];
+    };
+
+    // Convert UTF-16 to ASCII (Cygwin pty names are pure ASCII). Bail out
+    // on any non-ASCII codepoint — those names cannot match.
+    var ascii_buf: [256]u8 = undefined;
+    if (name_wide.len > ascii_buf.len) return false;
+    for (name_wide, 0..) |w, idx| {
+        if (w > 0x7F) return false;
+        ascii_buf[idx] = @intCast(w);
+    }
+    const name = ascii_buf[0..name_wide.len];
+
+    // Pattern: split by '-', require at least 5 parts:
+    //   parts[0] in {\msys, \cygwin, \Device\NamedPipe\msys, \Device\NamedPipe\cygwin}
+    //   parts[1] non-empty
+    //   parts[2] starts with "pty"
+    //   parts[3] in {from, to}
+    //   parts[4] == "master"
+    //   parts[5..] all non-empty (e.g. Win7 may append "-nat")
+    var parts: [16][]const u8 = undefined;
+    var nparts: usize = 0;
+    var it = std.mem.splitScalar(u8, name, '-');
+    while (it.next()) |p| {
+        if (nparts >= parts.len) return false;
+        parts[nparts] = p;
+        nparts += 1;
+    }
+    if (nparts < 5) return false;
+    const p0 = parts[0];
+    const ok0 = std.mem.eql(u8, p0, "\\msys") or
+        std.mem.eql(u8, p0, "\\cygwin") or
+        std.mem.eql(u8, p0, "\\Device\\NamedPipe\\msys") or
+        std.mem.eql(u8, p0, "\\Device\\NamedPipe\\cygwin");
+    if (!ok0) return false;
+    if (parts[1].len == 0) return false;
+    if (!std.mem.startsWith(u8, parts[2], "pty")) return false;
+    if (!(std.mem.eql(u8, parts[3], "from") or std.mem.eql(u8, parts[3], "to"))) return false;
+    if (!std.mem.eql(u8, parts[4], "master")) return false;
+    var k: usize = 5;
+    while (k < nparts) : (k += 1) {
+        if (parts[k].len == 0) return false;
+    }
+    return true;
+}
+
 // ---- Help text -----------------------------------------------------------
 
 const HELP =
@@ -52,18 +214,22 @@ const HELP =
     \\Usage:
     \\  die [opts] -- ARGS...
     \\  die [-n] <FILE
+    \\  die --help
     \\
     \\Options:
     \\  --sep STR       Joiner between ARGS, default " "
     \\  --trim MODE     Whitespace handling: each (default) | all | none
     \\  -n              Disable trailing-LF normalization (stdin path)
+    \\  --help          Show this help and exit 1 (must appear before --)
     \\
     \\Behavior:
     \\  - Output is always stderr, exit code is always 1.
     \\  - "--" is required when ARGS are present.
-    \\  - With no ARGS, stdin (pipe/redirect) is forwarded to stderr; a missing
-    \\    trailing LF is appended unless -n is given.
-    \\  - On a TTY with no ARGS, this help is printed and exit 1.
+    \\  - With no ARGS and stdin not a TTY (pipe / file / /dev/null / socket),
+    \\    stdin is forwarded to stderr; a missing trailing LF is appended
+    \\    unless -n is given.
+    \\  - With no ARGS and stdin IS a TTY, this help is printed and exit 1.
+    \\  - "--help" before "--" prints this help. After "--" it is an ARG.
     \\
 ;
 
@@ -302,6 +468,9 @@ pub fn main(init: process.Init.Minimal) noreturn {
             rest_start = i + 1;
             i += 1;
             break;
+        } else if (mem.eql(u8, a, "--help")) {
+            writeAll(STDERR, HELP);
+            process.exit(1);
         } else if (mem.eql(u8, a, "-n")) {
             normalize = false;
             i += 1;
@@ -347,8 +516,11 @@ pub fn main(init: process.Init.Minimal) noreturn {
         process.exit(1);
     }
 
-    // stdin path: TTY → help; pipe/redirect → forward
-    if (isatty(STDIN) != 0) {
+    // stdin path (DR-0008): TTY → help; everything else → forward.
+    // "Everything else" = pipe, regular file, /dev/null and other char devices,
+    // sockets (process substitution), block devices. /dev/null is forwarded
+    // as an empty input and gets a single \n via the normalize rule.
+    if (isStdinTty()) {
         writeAll(STDERR, HELP);
         process.exit(1);
     }

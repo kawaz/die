@@ -11,7 +11,10 @@
 # Test responsibility split (kawaz, 2026-06-27):
 #   This suite covers what only e2e can measure:
 #     - CLI invocation (argv parsing, --, --sep, --trim, -n recognition)
-#     - stdin / stderr / exit-code wiring (pipe vs /dev/null vs TTY)
+#     - stdin / stderr / exit-code wiring (pipe vs /dev/null vs file vs TTY)
+#       * TTY-path cases (= stdin is a real terminal) require a pty allocator
+#         and are split out into tests/tty.sh. This file covers everything that
+#         can be exercised without a real terminal.
 #     - DR-0001 invariants: exit == 1 AND stdout empty, on every case
 #     - DR-0005 / DR-0006: OS-cross EOL behaviour
 #         * default mode: die writes deterministic bytes; the host C runtime
@@ -66,6 +69,14 @@ run_case() {
     local tmp_out tmp_err
     tmp_out=$(mktemp) tmp_err=$(mktemp)
 
+    # Note on exit code capture across a pipe:
+    #   In the STDIN_DATA branch we run `printf … | "$@"`. `$?` here is the
+    #   exit code of the RIGHTMOST command in the pipeline (= die), which is
+    #   exactly what we want — bash's default is rightmost-wins regardless of
+    #   pipefail. Do NOT rewrite this to use `${PIPESTATUS[0]}` thinking it's
+    #   "more correct": [0] would point at `printf`, not die. If you ever need
+    #   a non-rightmost stage's exit, that's when `${PIPESTATUS[N]}` (bash) /
+    #   `${pipestatus[N]}` (zsh, 1-origin) matters.
     if [ "${STDIN_DATA+set}" = "set" ]; then
         printf '%s' "${STDIN_DATA}" | "$@" >"$tmp_out" 2>"$tmp_err"
         actual_exit=$?
@@ -433,23 +444,31 @@ raw_byte_check  '-n/trim-each/last-arg-lf-tail-stripped'  '__NOSTDIN__' 'a b X' 
 # the final \n, nothing else.
 raw_byte_check  '-n/sep-pipe/simple'                      '__NOSTDIN__' 'a|b|c'     -- "${DIE_BIN}" -n --sep '|' -- a b c
 
-# ---- stdin × ARG-path boundary (DR-0001 stdin handling) ----
-# Spec contour:
+# ---- stdin × ARG-path boundary (DR-0001 + DR-0008 stdin handling) ----
+# Spec contour (DR-0008 supersedes the DR-0001-era wording):
 #   - presence of `--` switches to ARG path UNCONDITIONALLY. After `--`, the
 #     ARGS (even if zero of them) are the input; stdin is ignored.
-#   - absence of `--` AND stdin is not a TTY → stdin path. stdin is forwarded.
-#   - absence of `--` AND stdin IS a TTY → help to stderr (not testable from
-#     this shell-based harness because pipes / /dev/null look identical to a
-#     TTY at the `</dev/null` redirect level; covered as a soft check
-#     `help-when-no-args` below).
+#   - absence of `--` AND stdin is a TTY (= real terminal) → help to stderr.
+#     This branch needs a pty allocator and lives in tests/tty.sh.
+#   - absence of `--` AND stdin is NOT a TTY → forward stdin to stderr.
+#     "Not a TTY" covers every fstat type other than a real terminal:
+#     anonymous pipes, named FIFOs, regular files, char devices (/dev/null,
+#     /dev/zero, …), sockets (process substitution), and block devices.
+#     /dev/null specifically is forwarded as an empty input → normalize rule
+#     appends \n.
 #
 # What's surprising and worth pinning:
 #   * `die --` with zero ARGs IS still the ARG path. The joined string is the
 #     empty string, append \n → output is just "\n". stdin is ignored even if
 #     piped.
-#   * `die` (no `--`, stdin /dev/null) takes the stdin path with empty input,
-#     producing the same single "\n". This collides visibly with the ARG-zero
-#     case but for different reasons — pin both to make the path explicit.
+#   * `die </dev/null` (no `--`, /dev/null as stdin) takes the stdin path with
+#     empty input, producing the same single "\n". Looks identical to the
+#     ARG-zero case but reaches it through a different branch — pin both to
+#     make the path explicit.
+#   * Windows NUL (= what Git Bash maps /dev/null to) must ALSO be classified
+#     as non-TTY (DR-0008). MSVCRT `_isatty()` famously lies about NUL; the
+#     die impl is required to use `GetConsoleMode` instead and so this case
+#     runs unconditionally — no OS-specific skip.
 
 # ARG path wins when both ARGS and stdin are supplied.
 expect_die_output  'boundary/arg-vs-stdin-arg-wins'        'STDIN_IGNORED' $'ARG\n' -- "${DIE_BIN}" -- ARG
@@ -464,22 +483,21 @@ expect_die_output  'boundary/dash-dash-zero-arg-no-stdin'  '__NOSTDIN__' $'\n'  
 # No `--` + stdin pipe → stdin path forwards bytes (append \n if missing).
 expect_die_output  'boundary/no-dash-dash-stdin-forwards'  'X'             $'X\n'   -- "${DIE_BIN}"
 
-# No `--` + stdin /dev/null (TTY-less, empty input) → stdin path, empty
-# input becomes a single \n on POSIX. Spec note: a real TTY would emit help
-# instead; the shell harness cannot distinguish a real TTY here.
-#
-# On Windows, `/dev/null` (= NUL device) is reported by _isatty() as a
-# character device, so die falls into the help path instead — that's an OS
-# semantic difference, not a die spec violation. Skip the case on Windows
-# bash (Git Bash) rather than papering over it.
-case "${OSTYPE:-}" in
-    msys*|cygwin*|win32*)
-        printf '  SKIP  boundary/no-dash-dash-empty-stdin  (Windows NUL is reported as a char device → help path)\n'
-        ;;
-    *)
-        expect_die_output  'boundary/no-dash-dash-empty-stdin'     '__NOSTDIN__' $'\n'      -- "${DIE_BIN}"
-        ;;
-esac
+# No `--` + stdin /dev/null → stdin path forwards an empty input → single \n.
+# /dev/null is a char device but NOT a TTY (POSIX `isatty(3)` returns false;
+# Windows `GetConsoleMode` fails for NUL). Runs unconditionally on all OSes
+# under DR-0008.
+expect_die_output  'boundary/no-dash-dash-empty-stdin'     '__NOSTDIN__' $'\n'      -- "${DIE_BIN}"
+
+# No `--` + stdin from a regular file → stdin path forwards file contents.
+# Verifies that `die <file.txt` is classified as forward, not help.
+_tmp_file=$(mktemp); printf 'FILE_DATA' >"$_tmp_file"
+expect_die_output  'boundary/no-dash-dash-regfile-forwards' '__NOSTDIN__' $'FILE_DATA\n' -- bash -c "${DIE_BIN} <\"${_tmp_file}\""
+rm -f "$_tmp_file"
+
+# No `--` + stdin from process substitution (`< <(...)`, opens /dev/fd/N for
+# read which is a socket on Linux / pipe on macOS) → stdin path forwards.
+expect_die_output  'boundary/no-dash-dash-procsub-forwards' '__NOSTDIN__' $'PROCSUB\n' -- bash -c "${DIE_BIN} < <(printf PROCSUB)"
 
 # `die -n --` (zero ARG + -n) → ARG path empty, -n suppresses append → "".
 raw_byte_check  'boundary/-n-dash-dash-zero-arg-empty'  '__NOSTDIN__' ''         -- "${DIE_BIN}" -n --
@@ -633,12 +651,78 @@ soft_err_check 'unknown-short-option'   "${DIE_BIN}" -x -- foo
 soft_err_check 'leading-dash-non-option' "${DIE_BIN}" -X
 soft_err_check 'option-like-arg-without-dashdash' "${DIE_BIN}" --foo
 
-# help on no-args + stdin redirected from /dev/null (== TTY-less but still
-# "no piped data"): impls may treat /dev/null differently from a TTY. The spec
-# says "ARGS empty + stdin TTY → help", so we cannot test the pure-TTY case
-# from this script. We at least verify exit=1 + stderr non-empty for the
-# "no args, /dev/null stdin" case as a reasonable proxy.
-soft_err_check 'help-when-no-args'      "${DIE_BIN}"
+# NOTE on help-when-no-args (DR-0008): under the new spec, `die </dev/null`
+# is the forward path (not help), so the old `help-when-no-args` proxy is
+# removed. The genuine TTY-help branch is exercised in tests/tty.sh under
+# a real pty.
+
+# ---- --help option (DR-0008) ----
+# Spec contour: `--help` placed BEFORE `--` is an option and emits the full
+# help text (not just an error line) to stderr with exit 1, regardless of
+# stdin state. `--help` placed AFTER `--` is treated as an ARG (= literal
+# "--help") to preserve the DR-0001 "after `--` anything passes safely"
+# property.
+#
+# These checks assert that stderr CONTAINS the literal "Usage:" string —
+# the help text starts with "die — print …" and includes a "Usage:" line.
+# This is what distinguishes the help branch from an "unknown option" error
+# (which has neither "Usage:" nor multiple lines).
+
+# Validates: exit==1, stdout empty, stderr non-empty AND contains MUST_SUBSTR.
+# Usage: help_text_check NAME MUST_SUBSTR -- CMD ARGS...
+# STDIN_DATA env behaves the same as run_case.
+help_text_check() {
+    local name=$1 must_substr=$2
+    shift 2
+    if [ "${1:-}" != "--" ]; then
+        echo "internal: help_text_check '${name}' missing -- separator" >&2
+        return 2
+    fi
+    shift
+    local _tmp_out _tmp_err _exit
+    _tmp_out=$(mktemp); _tmp_err=$(mktemp)
+    if [ "${STDIN_DATA+set}" = "set" ]; then
+        printf '%s' "${STDIN_DATA}" | "$@" >"${_tmp_out}" 2>"${_tmp_err}"
+        _exit=$?
+    else
+        "$@" </dev/null >"${_tmp_out}" 2>"${_tmp_err}"
+        _exit=$?
+    fi
+    local _out_size _err_size _err_text
+    _out_size=$(wc -c <"${_tmp_out}" | tr -d ' ')
+    _err_size=$(wc -c <"${_tmp_err}" | tr -d ' ')
+    _err_text=$(cat "${_tmp_err}")
+    rm -f "${_tmp_out}" "${_tmp_err}"
+    local ok=1
+    [ "${_exit}" = "1" ] || ok=0
+    [ "${_out_size}" = "0" ] || ok=0
+    [ "${_err_size}" -gt 0 ] || ok=0
+    case "${_err_text}" in *"${must_substr}"*) ;; *) ok=0 ;; esac
+    if [ "${ok}" = "1" ]; then
+        pass=$((pass + 1))
+        printf '  PASS  help/%s\n' "${name}"
+    else
+        fail=$((fail + 1))
+        failures+=("help/${name}")
+        printf '  FAIL  help/%s  exit=%s stdout_size=%s stderr_size=%s contains_%q=%s\n' \
+            "${name}" "${_exit}" "${_out_size}" "${_err_size}" "${must_substr}" \
+            "$(case "${_err_text}" in *"${must_substr}"*) echo yes ;; *) echo no ;; esac)"
+    fi
+}
+
+# --help with no stdin → full help text (contains "Usage:") to stderr, exit 1.
+help_text_check 'help-option/no-stdin'           'Usage:' -- "${DIE_BIN}" --help
+
+# --help with a pipe on stdin → help wins over forward; stdin is ignored.
+STDIN_DATA='STDIN_IGNORED_BY_HELP'
+help_text_check 'help-option/with-stdin-pipe'    'Usage:' -- "${DIE_BIN}" --help
+unset STDIN_DATA
+
+# --help with ARGS following → help wins (option parsed before `--`).
+help_text_check 'help-option/with-trailing-args' 'Usage:' -- "${DIE_BIN}" --help -- foo bar
+
+# `die -- --help` is the ARG path; "--help" is treated as a literal ARG.
+# Already covered above by `arg/dash-dash-then-literal-help`; not duplicated.
 
 # ---- Option parsing edge cases that are NOT errors ----
 # Spec contour: --sep accepts both '--sep VALUE' and '--sep=VALUE' forms;
