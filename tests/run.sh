@@ -502,6 +502,35 @@ raw_byte_check  'sep-empty/expose-lf-tail-first-arg'     '__NOSTDIN__' $'a\n'   
 # \r-tail of the last non-empty ARG is exposed → append \n → "...\r\n".
 raw_byte_check  'sep-empty/expose-cr-tail'               '__NOSTDIN__' $'a\r\n'   -- "${DIE_BIN}" --trim none --sep '' -- $'a\r' ''
 
+# ---- Non-empty sep + trailing empty ARG: sep's last byte is exposed ----
+# Spec contour: when the last ARG is empty (and ARGs >= 2), the joined
+# string ends with the separator. The append decision then looks at the
+# sep's last byte, NOT the last ARG's content.
+
+# sep = "\r" → joined ends with \r → not \n → append \n → "...\r\n"
+raw_byte_check  'sep-cr/last-empty-cr-exposed'           '__NOSTDIN__' $'a\r\n'   -- "${DIE_BIN}" --trim none --sep $'\r' -- a ''
+# sep = "\n" → joined ends with \n → no append
+raw_byte_check  'sep-lf/last-empty-lf-exposed'           '__NOSTDIN__' $'a\n'     -- "${DIE_BIN}" --trim none --sep $'\n' -- a ''
+# sep = "XYZ" → joined ends with Z → not \n → append
+raw_byte_check  'sep-multichar/last-empty-Z-exposed'     '__NOSTDIN__' $'aXYZ\n'  -- "${DIE_BIN}" --trim none --sep 'XYZ' -- a ''
+
+# Two empty trailing ARGs duplicate the sep at the tail.
+# sep = "\r" twice → "\r\r" → not \n → append → "\r\r\n"
+raw_byte_check  'sep-cr/two-empty-trailing'              '__NOSTDIN__' $'a\r\r\n' -- "${DIE_BIN}" --trim none --sep $'\r' -- a '' ''
+# sep = "\n" twice → "\n\n" → ends in \n → no append (empty line preserved
+# in the spirit of DR-0002).
+raw_byte_check  'sep-lf/two-empty-trailing'              '__NOSTDIN__' $'a\n\n'   -- "${DIE_BIN}" --trim none --sep $'\n' -- a '' ''
+
+# All-empty ARGs with non-empty sep: the sep appears between adjacent empties.
+# Two empties → one sep slot in the middle → just the sep.
+raw_byte_check  'sep-X/two-empty-args'                   '__NOSTDIN__' $'X\n'     -- "${DIE_BIN}" --trim none --sep 'X' -- '' ''
+# Single empty ARG → no sep slot (no neighbour) → empty joined → just \n.
+raw_byte_check  'sep-X/one-empty-arg'                    '__NOSTDIN__' $'\n'      -- "${DIE_BIN}" --trim none --sep 'X' -- ''
+
+# -n suppresses the append even when sep alone is exposed.
+raw_byte_check  '-n/sep-cr/last-empty-no-append'         '__NOSTDIN__' $'a\r'     -- "${DIE_BIN}" -n --trim none --sep $'\r' -- a ''
+raw_byte_check  '-n/sep-lf/last-empty-already-lf'        '__NOSTDIN__' $'a\n'     -- "${DIE_BIN}" -n --trim none --sep $'\n' -- a ''
+
 # ---------- error / usage ----------
 # Error message text is implementation-detail. We only assert: exit=1, stdout
 # empty, stderr non-empty.
