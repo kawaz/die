@@ -145,8 +145,18 @@ on-success-release:
 
 # ---------- utility ----------
 
-# display VERSION (from build.zig.zon) + presence of built / installed binary
+# display VERSION (from build.zig.zon) + bin --version output + size for built / installed
 version:
     echo "VERSION: $(bump-semver get build.zig.zon)"
-    if [ -x ./bin/die ]; then echo "binary: ./bin/die (size $(wc -c <./bin/die | tr -d ' ') B)"; fi
-    if command -v die >/dev/null 2>&1; then echo "installed: $(command -v die) (size $(wc -c <"$(command -v die)" | tr -d ' ') B)"; fi
+    if [ -x ./bin/die ]; then \
+        echo "binary: ./bin/die ($(./bin/die --version 2>&1) / size $(wc -c <./bin/die | tr -d ' ') B)"; \
+    fi
+    if command -v die >/dev/null 2>&1; then \
+        echo "installed: $(command -v die) ($(die --version 2>&1) / size $(wc -c <"$(command -v die)" | tr -d ' ') B)"; \
+    fi
+
+# build then run the local binary, forwarding all args (e.g. `just run --help`).
+# Note: die always exits 1 by spec (DR-0001), so just reports the recipe as
+# "failed" with exit 1 — that is the correct, normal outcome for `just run`.
+run *ARGS: build
+    ./bin/die "$@"
