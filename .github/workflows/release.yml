@@ -112,6 +112,8 @@ jobs:
             asset: die-linux-arm64
           - target: x86_64-linux-musl
             asset: die-linux-amd64-musl
+          - target: aarch64-linux-musl
+            asset: die-linux-arm64-musl
           - target: x86_64-windows-gnu
             asset: die-windows-amd64.exe
     runs-on: ubuntu-latest

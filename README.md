@@ -10,8 +10,28 @@ Provide a generic `die` for shell scripts and justfiles (`cmd || die "context"`)
 
 ## Installation
 
+### Homebrew (macOS / Linuxbrew)
+
 ```sh
 brew install kawaz/tap/die
+```
+
+### Direct download (Docker / scratch / Alpine / distroless)
+
+Pick the artifact that matches your environment from the latest [release](https://github.com/kawaz/die/releases):
+
+| target | use it when |
+|---|---|
+| `die-linux-amd64-musl` / `die-linux-arm64-musl` | statically linked. drop into `FROM scratch`, `FROM alpine`, `FROM gcr.io/distroless/static` — no glibc needed |
+| `die-linux-amd64` / `die-linux-arm64` | dynamically linked against glibc. for `FROM ubuntu` / `FROM debian` / `FROM gcr.io/distroless/base` |
+| `die-darwin-amd64` / `die-darwin-arm64` | macOS native binaries (`brew` covers this on local machines) |
+| `die-windows-amd64.exe` | Windows native |
+
+Example Dockerfile snippet (scratch + arm64):
+
+```dockerfile
+FROM scratch
+ADD https://github.com/kawaz/die/releases/latest/download/die-linux-arm64-musl /usr/local/bin/die
 ```
 
 Implemented in Zig (see [DR-0007](./docs/decisions/DR-0007-adopt-zig-archive-others.md) for the rationale).
