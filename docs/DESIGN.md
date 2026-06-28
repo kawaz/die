@@ -22,6 +22,7 @@ By shipping it as a **single OS binary**, `brew install die` makes it available 
 die [opts] -- ARGS...
 die [-n] <FILE
 die --help
+die --version
 ```
 
 ### Options
@@ -31,7 +32,8 @@ die --help
 | `--sep STR` | Joiner between ARGS, default `" "` |
 | `--trim MODE` | ASCII-whitespace handling (`each` / `all` / `none`), default `each` |
 | `-n` | Disable LF normalization (= cat equivalent byte-transparent output) |
-| `--help` | Show help to stderr and exit 1. Must appear before `--`; after `--` it is treated as an ARG (literal `--help`). |
+| `--help` | Show help to stderr and exit **0** (meta query). Must appear before `--`; after `--` it is treated as an ARG (literal `--help`). |
+| `--version` | Print `die <version>` to stderr and exit **0** (meta query). Must appear before `--`; after `--` it is treated as an ARG. |
 
 `--trim` MODE:
 
@@ -44,7 +46,7 @@ die --help
 ### Invariants
 
 - **Output destination**: always stderr
-- **Exit code**: always 1
+- **Exit code**: 1 for die's actual operation (ARG / stdin paths, bare-TTY help fallback, any usage error). **0 only for explicit meta queries** — `--help` and `--version` (= the user asking die about itself, not asking die to die). See [DR-0009](./decisions/DR-0009-exit-code-policy-and-version-option.md).
 - **`--` is required**: the separator between opts and ARGS. `die foo` (without `--`) is a syntax error
 - **Environment variables**: none — all behavior is contained in argv
 
@@ -54,7 +56,7 @@ Branch is decided by `--` presence and (when no `--`) by stdin TTY classificatio
 
 - ARGS supplied (= `--` present) → ARG path. stdin is ignored even if piped.
 - ARGS empty (= no `--`) + stdin is NOT a TTY → forward stdin to stderr. "Not a TTY" covers anonymous pipes, named FIFOs, regular files, char devices (`/dev/null`, `/dev/zero`, …), sockets (process substitution), and block devices. `/dev/null` is forwarded as empty input and gets a single `\n` via the normalize rule.
-- ARGS empty (= no `--`) + stdin IS a TTY → emit help to stderr and exit 1.
+- ARGS empty (= no `--`) + stdin IS a TTY → emit help to stderr and exit 1 (= bare-TTY help fallback, usage error category — distinct from the explicit `--help` query which exits 0).
 
 TTY detection (see [DR-0008](./decisions/DR-0008-stdin-tty-routing-and-help-option.md) and [findings/2026-06-28-tty-detection-cross-os.md](./findings/2026-06-28-tty-detection-cross-os.md)):
 
@@ -95,14 +97,16 @@ Defaults don't need explicit forms — not writing the option is the same. Addin
 
 `-n` is `die`'s only short option. Short forms are reserved for frequent usage; the long form would only add API surface without value.
 
-### Help
+### Help & version meta queries
 
-Two paths emit the same help:
+Two paths emit the same help text:
 
-1. `die` with no ARGS and stdin is a TTY → help to stderr, exit 1.
-2. `--help` option placed before `--` → same help, regardless of stdin state, exit 1.
+1. `die` with no ARGS and stdin is a TTY → help to stderr, **exit 1** (bare-TTY fallback, usage error — user didn't know what to feed).
+2. `--help` option placed before `--` → same help, regardless of stdin state, **exit 0** (explicit meta query — user asked, die answered).
 
-DR-0001's "after `--` anything passes safely" property is preserved: `die -- --help` echoes literal "--help" to stderr (= treated as an ARG). See [DR-0008](./decisions/DR-0008-stdin-tty-routing-and-help-option.md).
+`--version` mirrors the explicit-`--help` shape: `die --version` → `die <X.Y.Z>\n` to stderr, exit 0.
+
+DR-0001's "after `--` anything passes safely" property is preserved: `die -- --help` and `die -- --version` echo the literal strings to stderr (= treated as ARGs, exit 1). See [DR-0008](./decisions/DR-0008-stdin-tty-routing-and-help-option.md) and [DR-0009](./decisions/DR-0009-exit-code-policy-and-version-option.md).
 
 ### Why explain "pipe-context LF appending differs from cat"
 

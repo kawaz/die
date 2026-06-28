@@ -46,11 +46,11 @@ DR-0001 で確定した spec の stdin 周りは次の 3 経路:
 
 ### `--help` option
 
-- `--` の **前** にある `--help` は option として解釈、help を stderr に出して exit 1
-- `--` の **後** にある `--help` (= `die -- --help`) は ARGS として扱い、literal "--help" を stderr に echo して exit 1 (= DR-0001 の「`--` 以降は何でも safe に渡せる」property を維持)
+- `--` の **前** にある `--help` は option として解釈、help を stderr に出して exit する
+- `--` の **後** にある `--help` (= `die -- --help`) は ARGS として扱い、literal "--help" を stderr に echo (= DR-0001 の「`--` 以降は何でも safe に渡せる」property を維持)
 - `--help` option は **stdin 状態に関わらず勝つ** (= `printf X | die --help` でも help)
-- exit code は **1** で固定 (= die invariant: exit code は常に 1)
 - 出力先は **stderr** (= die invariant: 出力は常に stderr)
+- exit code: 本 DR では exit 1 と定めた、後続の [DR-0009](./DR-0009-exit-code-policy-and-version-option.md) で **exit 0 に refine** (= meta query は success 扱い)。最新の挙動は DR-0009 を参照
 
 ### Option parser の優先順位
 
