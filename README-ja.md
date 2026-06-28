@@ -10,29 +10,11 @@ bash script や justfile で `cmd || die "context"` のように書ける汎用 
 
 ## インストール
 
-### Homebrew (macOS / Linuxbrew)
-
 ```sh
 brew install kawaz/tap/die
 ```
 
-### バイナリ直接 (Docker / scratch / Alpine / distroless)
-
-最新 [release](https://github.com/kawaz/die/releases) から環境に合う artifact を選ぶ:
-
-| target | 用途 |
-|---|---|
-| `die-linux-amd64-musl` / `die-linux-arm64-musl` | static link。`FROM scratch` / `FROM alpine` / `FROM gcr.io/distroless/static` にそのまま入れられる (glibc 不要) |
-| `die-linux-amd64` / `die-linux-arm64` | glibc に dynamic link。`FROM ubuntu` / `FROM debian` / `FROM gcr.io/distroless/base` 等で使う |
-| `die-darwin-amd64` / `die-darwin-arm64` | macOS native (= ローカルなら brew で OK) |
-| `die-windows-amd64.exe` | Windows native |
-
-Dockerfile 例 (scratch + arm64):
-
-```dockerfile
-FROM scratch
-ADD https://github.com/kawaz/die/releases/latest/download/die-linux-arm64-musl /usr/local/bin/die
-```
+macOS / Linux (gnu & musl) / Windows × amd64 / arm64 の prebuilt binary は [Releases](https://github.com/kawaz/die/releases) にある。
 
 実装は Zig (採用理由は [DR-0007](./docs/decisions/DR-0007-adopt-zig-archive-others.md) を参照)。
 
@@ -40,7 +22,7 @@ ADD https://github.com/kawaz/die/releases/latest/download/die-linux-arm64-musl /
 
 ```sh
 die [opts] -- ARGS...
-die [-n] <FILE
+die [-n] < FILE
 ```
 
 ### Options
@@ -72,7 +54,6 @@ cmd_with_lf | die -n
 
 - [DESIGN-ja.md](./docs/DESIGN-ja.md) — 仕様と設計判断
 - [STRUCTURE.md](./docs/STRUCTURE.md) — リポジトリ物理構造
-- [ROADMAP.md](./docs/ROADMAP.md) — 将来検討項目
 
 ## ライセンス
 
