@@ -218,7 +218,7 @@ const HELP =
     \\
     \\Usage:
     \\  die [opts] -- ARGS...
-    \\  die [-n] <FILE
+    \\  die [-n] < FILE
     \\
     \\Options:
     \\  --sep STR       Joiner between ARGS, default " "

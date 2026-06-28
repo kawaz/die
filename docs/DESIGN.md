@@ -20,7 +20,7 @@ By shipping it as a **single OS binary**, `brew install die` makes it available 
 
 ```
 die [opts] -- ARGS...
-die [-n] <FILE
+die [-n] < FILE
 ```
 
 ### Options

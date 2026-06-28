@@ -20,7 +20,7 @@ shell script / justfile で「**メッセージを stderr に書いて失敗 exi
 
 ```
 die [opts] -- ARGS...
-die [-n] <FILE
+die [-n] < FILE
 ```
 
 ### Options
