@@ -1,19 +1,22 @@
 name: Release
 
-# VERSION ファイル変更を trigger に release を自動生成 (kawaz 標準フロー):
-#   1. check-version: VERSION 妥当性 + 旧 tag より大きいか (二重 release 防止)
+# build.zig.zon の .version 変更を trigger に release を自動生成 (Zig native の慣習):
+#   1. check-version: zon から version 抽出 + 旧 tag より大きいか (二重 release 防止)
 #   2. build: cross-compile matrix で各 target binary を作成
 #   3. release: gh release create でタグ + Release 作成 + binary 添付
 #   4. update-homebrew: kawaz/homebrew-tap に formula を自動更新
 #
 # tag は workflow 自身が打つ (gh release create が自動で作る)。人 / AI は
 # tag を扱わない (= kawaz 標準: release-flow-awareness rule)。
+#
+# Note: Zig project の version は build.zig.zon が正本 (= 別 VERSION ファイル
+# を作らない)。bump-semver は zon を text+regex で扱える (= basename 検出)。
 
 on:
   push:
     branches: [main]
     paths:
-      - "VERSION"
+      - "build.zig.zon"
 
 permissions:
   contents: write
@@ -34,10 +37,11 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          CURRENT=$(tr -d '[:space:]' < VERSION)
+          # build.zig.zon の .version = "X.Y.Z" を抽出
+          CURRENT=$(grep -E '^\s*\.version\s*=' build.zig.zon | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
           echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
 
-          # VERSION=0.0.x プレースホルダ (= 初期未リリース状態) はスキップ
+          # 0.0.x プレースホルダ (= 初期未リリース状態) はスキップ
           if [ -z "$CURRENT" ] || [ "$CURRENT" = "0.0.0" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Placeholder version (${CURRENT:-empty}); skipping release."

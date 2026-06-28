@@ -77,23 +77,23 @@ check-on-default-branch:
     bump-semver vcs is on-default-branch
 
 # fail if source / build / tests changed since default-branch@origin
-# without bumping VERSION
-check-version-bumped: (_check-version-bumped "build.zig" "build.zig.zon" "src/" "tests/")
+# without bumping build.zig.zon's .version
+check-version-bumped: (_check-version-bumped "build.zig" "src/" "tests/")
 
 [private]
 [script]
 _check-version-bumped *target_paths:
     bn=$(bump-semver vcs get default-branch)
     if ! bump-semver vcs diff -q "${bn}@origin" -- "$@"; then
-        bump-semver compare gt VERSION "vcs:${bn}@origin"
+        bump-semver compare gt build.zig.zon "vcs:${bn}@origin"
     fi
 
-# fail if VERSION is not greater than the latest release
+# fail if build.zig.zon's .version is not greater than the latest release
 [private]
 [script]
 check-against-latest-release:
     bn=$(bump-semver vcs get default-branch)
-    bump-semver compare gt VERSION "vcs:${bn}@origin"
+    bump-semver compare gt build.zig.zon "vcs:${bn}@origin"
 
 # README-ja → README, DESIGN-ja → DESIGN translation pair freshness
 [private]
@@ -102,10 +102,10 @@ check-outdated-translations: ensure-clean
 
 # ---------- release flow ----------
 
-# bump VERSION (default: patch) and create a release commit
+# bump .version in build.zig.zon (default: patch) and create a release commit
 bump-version level="patch": ensure-clean
-    bump-semver "$1" VERSION --write --quiet
-    bump-semver vcs commit -m "Release v$(bump-semver get VERSION)" VERSION
+    bump-semver "$1" build.zig.zon --write --quiet
+    bump-semver vcs commit -m "Release v$(bump-semver get build.zig.zon)" build.zig.zon
 
 # release push: default-branch only, all gates on
 push: check-on-default-branch ci check-outdated-translations check-version-bumped
@@ -132,16 +132,17 @@ push-wip: ensure-clean ci
     [ "$target" != "$bn" ] || exit 1
     bump-semver vcs push --branch "$target" --jj-bookmark-auto-advance
 
-# release.yml workflow success → refresh homebrew tap and verify
+# release.yml workflow success → refresh homebrew tap and reinstall
 on-success-release:
     git -C "$(brew --repository)/Library/Taps/kawaz/homebrew-tap" pull --ff-only
     brew upgrade kawaz/tap/die
-    die --version 2>&1 || true
+    die -- "die smoke test (post-upgrade)" || true
+    echo "VERSION: $(bump-semver get build.zig.zon)"
 
 # ---------- utility ----------
 
-# display VERSION + built/installed binary versions
+# display VERSION (from build.zig.zon) + presence of built / installed binary
 version:
-    echo "VERSION: $(cat VERSION)"
-    if [ -x ./bin/die ]; then echo "binary: $(./bin/die --version 2>&1 || echo '(no --version)')"; fi
-    if command -v die >/dev/null 2>&1; then echo "installed: $(die --version 2>&1 || echo '(no --version)')"; fi
+    echo "VERSION: $(bump-semver get build.zig.zon)"
+    if [ -x ./bin/die ]; then echo "binary: ./bin/die (size $(wc -c <./bin/die | tr -d ' ') B)"; fi
+    if command -v die >/dev/null 2>&1; then echo "installed: $(command -v die) (size $(wc -c <"$(command -v die)" | tr -d ' ') B)"; fi
