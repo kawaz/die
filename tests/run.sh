@@ -360,12 +360,12 @@ expect_die_output 'stdin/double-lf-preserved'     $'X\n\n'      $'X\n\n'     -- 
 expect_die_output 'stdin/empty-becomes-lf-raw'    ''            $'\n'        -- "${DIE_BIN}"
 
 # ---- -n cases — cat-equivalent, strict byte match (no CRT expansion under -n) ----
-raw_byte_check  'stdin/-n-no-lf'                  'X'           'X'          -- "${DIE_BIN}" -n
-raw_byte_check  'stdin/-n-keeps-lf'               $'X\n'        $'X\n'       -- "${DIE_BIN}" -n
-raw_byte_check  'stdin/-n-keeps-crlf'             $'X\r\n'      $'X\r\n'     -- "${DIE_BIN}" -n
-raw_byte_check  'stdin/-n-keeps-cr'               $'X\r'        $'X\r'       -- "${DIE_BIN}" -n
-raw_byte_check  'stdin/-n-keeps-double-lf'        $'X\n\n'      $'X\n\n'     -- "${DIE_BIN}" -n
-raw_byte_check  'stdin/-n-empty-stays-empty'      ''            ''           -- "${DIE_BIN}" -n
+expect_die_output  'stdin/-n-no-lf'                  'X'           'X'          -- "${DIE_BIN}" -n
+expect_die_output  'stdin/-n-keeps-lf'               $'X\n'        $'X\n'       -- "${DIE_BIN}" -n
+expect_die_output  'stdin/-n-keeps-crlf'             $'X\r\n'      $'X\r\n'     -- "${DIE_BIN}" -n
+expect_die_output  'stdin/-n-keeps-cr'               $'X\r'        $'X\r'       -- "${DIE_BIN}" -n
+expect_die_output  'stdin/-n-keeps-double-lf'        $'X\n\n'      $'X\n\n'     -- "${DIE_BIN}" -n
+expect_die_output  'stdin/-n-empty-stays-empty'      ''            ''           -- "${DIE_BIN}" -n
 
 # ---- -n on the ARG path (DR-0002 + DR-0006): -n suppresses LF append ----
 # Spec contour: -n means "do not append \n" regardless of the input path.
@@ -381,9 +381,9 @@ raw_byte_check  'stdin/-n-n-idempotent'           'X'           'X'          -- 
 # ---- Anything after `--` is a literal ARG, even an option-looking token ----
 # Spec contour: -n placed after `--` is not parsed as an option. This is the
 # core "you can pass anything safely" property (DR-0001: `--` 必須化).
-raw_byte_check  'arg/dash-dash-then-literal-n'    '__NOSTDIN__' $'-n\n'      -- "${DIE_BIN}" -- -n
-raw_byte_check  'arg/dash-dash-then-literal-help' '__NOSTDIN__' $'--help\n'  -- "${DIE_BIN}" -- --help
-raw_byte_check  'arg/dash-dash-then-literal-trim' '__NOSTDIN__' $'--trim each\n' -- "${DIE_BIN}" -- '--trim each'
+expect_die_output  'arg/dash-dash-then-literal-n'    '__NOSTDIN__' $'-n\n'      -- "${DIE_BIN}" -- -n
+expect_die_output  'arg/dash-dash-then-literal-help' '__NOSTDIN__' $'--help\n'  -- "${DIE_BIN}" -- --help
+expect_die_output  'arg/dash-dash-then-literal-trim' '__NOSTDIN__' $'--trim each\n' -- "${DIE_BIN}" -- '--trim each'
 
 # ---- The interaction surface that -n actually sits on ----
 # Spec contour clarification (kawaz, 2026-06-28): -n only changes whether the
@@ -402,31 +402,31 @@ raw_byte_check  'arg/dash-dash-then-literal-trim' '__NOSTDIN__' $'--trim each\n'
 
 # trim none + sep ending in \n + non-empty last ARG → tail is the ARG's last
 # byte, not \n → append. -n suppresses the append.
-raw_byte_check  'trim-none/sep-lf/non-empty-last'         '__NOSTDIN__' $'a\nb\n'   -- "${DIE_BIN}" --trim none --sep $'\n' -- a b
+expect_die_output  'trim-none/sep-lf/non-empty-last'         '__NOSTDIN__' $'a\nb\n'   -- "${DIE_BIN}" --trim none --sep $'\n' -- a b
 raw_byte_check  '-n/trim-none/sep-lf/non-empty-last'      '__NOSTDIN__' $'a\nb'     -- "${DIE_BIN}" -n --trim none --sep $'\n' -- a b
 
 # trim none + sep ending in \n + EMPTY last ARG → joined ends in \n already
 # → no append. -n changes nothing because there is nothing to suppress.
-raw_byte_check  'trim-none/sep-lf/empty-last-no-append'   '__NOSTDIN__' $'a\n'      -- "${DIE_BIN}" --trim none --sep $'\n' -- a ''
+expect_die_output  'trim-none/sep-lf/empty-last-no-append'   '__NOSTDIN__' $'a\n'      -- "${DIE_BIN}" --trim none --sep $'\n' -- a ''
 raw_byte_check  '-n/trim-none/sep-lf/empty-last-same'     '__NOSTDIN__' $'a\n'      -- "${DIE_BIN}" -n --trim none --sep $'\n' -- a ''
 
 # trim none + sep CR + last ARG 'n' → joined "a\rn" → tail 'n' is not \n
 # → append. (kawaz example: sep \r, last ARG n)
-raw_byte_check  'trim-none/sep-cr/last-letter-n'          '__NOSTDIN__' $'a\rn\n'   -- "${DIE_BIN}" --trim none --sep $'\r' -- a n
+expect_die_output  'trim-none/sep-cr/last-letter-n'          '__NOSTDIN__' $'a\rn\n'   -- "${DIE_BIN}" --trim none --sep $'\r' -- a n
 raw_byte_check  '-n/trim-none/sep-cr/last-letter-n'       '__NOSTDIN__' $'a\rn'     -- "${DIE_BIN}" -n --trim none --sep $'\r' -- a n
 
 # trim none + sep CR + EMPTY last ARG → joined "a\r" → tail \r is not \n
 # → append \n → output "a\r\n". -n → "a\r" (no append).
-raw_byte_check  'trim-none/sep-cr/empty-last-cr-tail'     '__NOSTDIN__' $'a\r\n'    -- "${DIE_BIN}" --trim none --sep $'\r' -- a ''
+expect_die_output  'trim-none/sep-cr/empty-last-cr-tail'     '__NOSTDIN__' $'a\r\n'    -- "${DIE_BIN}" --trim none --sep $'\r' -- a ''
 raw_byte_check  '-n/trim-none/sep-cr/empty-last-cr-tail'  '__NOSTDIN__' $'a\r'      -- "${DIE_BIN}" -n --trim none --sep $'\r' -- a ''
 
 # trim none + last ARG already ends in \n → no append regardless of -n.
-raw_byte_check  'trim-none/last-arg-lf-tail'              '__NOSTDIN__' $'a b X\n'  -- "${DIE_BIN}" --trim none -- 'a' 'b' $'X\n'
+expect_die_output  'trim-none/last-arg-lf-tail'              '__NOSTDIN__' $'a b X\n'  -- "${DIE_BIN}" --trim none -- 'a' 'b' $'X\n'
 raw_byte_check  '-n/trim-none/last-arg-lf-tail-same'      '__NOSTDIN__' $'a b X\n'  -- "${DIE_BIN}" -n --trim none -- 'a' 'b' $'X\n'
 
 # trim each strips the last ARG's tail \n BEFORE the append decision → \n
 # always gets re-appended; -n suppresses the re-append.
-raw_byte_check  'trim-each/last-arg-lf-tail-stripped'     '__NOSTDIN__' $'a b X\n'  -- "${DIE_BIN}" --trim each -- 'a' 'b' $'X\n'
+expect_die_output  'trim-each/last-arg-lf-tail-stripped'     '__NOSTDIN__' $'a b X\n'  -- "${DIE_BIN}" --trim each -- 'a' 'b' $'X\n'
 raw_byte_check  '-n/trim-each/last-arg-lf-tail-stripped'  '__NOSTDIN__' 'a b X'     -- "${DIE_BIN}" -n --trim each -- 'a' 'b' $'X\n'
 
 # Plain orthogonal sanity check: -n on the simple --sep+ARG path drops only
@@ -452,22 +452,22 @@ raw_byte_check  '-n/sep-pipe/simple'                      '__NOSTDIN__' 'a|b|c' 
 #     case but for different reasons — pin both to make the path explicit.
 
 # ARG path wins when both ARGS and stdin are supplied.
-raw_byte_check  'boundary/arg-vs-stdin-arg-wins'        'STDIN_IGNORED' $'ARG\n' -- "${DIE_BIN}" -- ARG
+expect_die_output  'boundary/arg-vs-stdin-arg-wins'        'STDIN_IGNORED' $'ARG\n' -- "${DIE_BIN}" -- ARG
 
 # `die --` (zero ARG) + stdin pipe → ARG path (empty join + append \n).
 # stdin content is dropped.
-raw_byte_check  'boundary/dash-dash-zero-arg-stdin-ignored' 'STDIN_DROPPED' $'\n' -- "${DIE_BIN}" --
+expect_die_output  'boundary/dash-dash-zero-arg-stdin-ignored' 'STDIN_DROPPED' $'\n' -- "${DIE_BIN}" --
 
 # `die --` (zero ARG) + stdin /dev/null → identical to the pipe case.
-raw_byte_check  'boundary/dash-dash-zero-arg-no-stdin'  '__NOSTDIN__' $'\n'      -- "${DIE_BIN}" --
+expect_die_output  'boundary/dash-dash-zero-arg-no-stdin'  '__NOSTDIN__' $'\n'      -- "${DIE_BIN}" --
 
 # No `--` + stdin pipe → stdin path forwards bytes (append \n if missing).
-raw_byte_check  'boundary/no-dash-dash-stdin-forwards'  'X'             $'X\n'   -- "${DIE_BIN}"
+expect_die_output  'boundary/no-dash-dash-stdin-forwards'  'X'             $'X\n'   -- "${DIE_BIN}"
 
 # No `--` + stdin /dev/null (TTY-less, empty input) → stdin path, empty
 # input becomes a single \n. Spec note: a real TTY would emit help instead;
 # the shell harness cannot distinguish a real TTY here.
-raw_byte_check  'boundary/no-dash-dash-empty-stdin'     '__NOSTDIN__' $'\n'      -- "${DIE_BIN}"
+expect_die_output  'boundary/no-dash-dash-empty-stdin'     '__NOSTDIN__' $'\n'      -- "${DIE_BIN}"
 
 # `die -n --` (zero ARG + -n) → ARG path empty, -n suppresses append → "".
 raw_byte_check  'boundary/-n-dash-dash-zero-arg-empty'  '__NOSTDIN__' ''         -- "${DIE_BIN}" -n --
@@ -475,11 +475,11 @@ raw_byte_check  'boundary/-n-dash-dash-zero-arg-empty'  '__NOSTDIN__' ''        
 # ---- Empty sep edge cases ----
 # Spec contour: --sep '' joins ARGs with nothing between them. The append
 # decision still looks at the joined string's last byte exactly as above.
-raw_byte_check  'trim-none/sep-empty/last-letter'         '__NOSTDIN__' $'an\n'     -- "${DIE_BIN}" --trim none --sep '' -- a n
-raw_byte_check  'trim-none/sep-empty/last-lf'             '__NOSTDIN__' $'ab\n'     -- "${DIE_BIN}" --trim none --sep '' -- a $'b\n'
-raw_byte_check  'trim-none/sep-empty/last-cr'             '__NOSTDIN__' $'ab\r\n'   -- "${DIE_BIN}" --trim none --sep '' -- a $'b\r'
-raw_byte_check  'trim-none/sep-empty/last-empty'          '__NOSTDIN__' $'a\n'      -- "${DIE_BIN}" --trim none --sep '' -- a ''
-raw_byte_check  'trim-none/sep-empty/all-empty'           '__NOSTDIN__' $'\n'       -- "${DIE_BIN}" --trim none --sep '' -- '' ''
+expect_die_output  'trim-none/sep-empty/last-letter'         '__NOSTDIN__' $'an\n'     -- "${DIE_BIN}" --trim none --sep '' -- a n
+expect_die_output  'trim-none/sep-empty/last-lf'             '__NOSTDIN__' $'ab\n'     -- "${DIE_BIN}" --trim none --sep '' -- a $'b\n'
+expect_die_output  'trim-none/sep-empty/last-cr'             '__NOSTDIN__' $'ab\r\n'   -- "${DIE_BIN}" --trim none --sep '' -- a $'b\r'
+expect_die_output  'trim-none/sep-empty/last-empty'          '__NOSTDIN__' $'a\n'      -- "${DIE_BIN}" --trim none --sep '' -- a ''
+expect_die_output  'trim-none/sep-empty/all-empty'           '__NOSTDIN__' $'\n'       -- "${DIE_BIN}" --trim none --sep '' -- '' ''
 raw_byte_check  '-n/trim-none/sep-empty/last-letter'      '__NOSTDIN__' 'an'        -- "${DIE_BIN}" -n --trim none --sep '' -- a n
 raw_byte_check  '-n/trim-none/sep-empty/last-lf-no-suppress' '__NOSTDIN__' $'ab\n'  -- "${DIE_BIN}" -n --trim none --sep '' -- a $'b\n'
 raw_byte_check  '-n/trim-none/sep-empty/last-empty-no-lf' '__NOSTDIN__' 'a'         -- "${DIE_BIN}" -n --trim none --sep '' -- a ''
@@ -492,15 +492,15 @@ raw_byte_check  '-n/trim-none/sep-empty/last-empty-no-lf' '__NOSTDIN__' 'a'     
 # attributable to the empty trailing ARGs.
 
 # Letter-tail of the last non-empty ARG is exposed → append \n.
-raw_byte_check  'sep-empty/expose-letter-tail'           '__NOSTDIN__' $'ab\n'    -- "${DIE_BIN}" --trim none --sep '' -- a b '' '' ''
-raw_byte_check  'sep-empty/expose-letter-mid-empty'      '__NOSTDIN__' $'ab\n'    -- "${DIE_BIN}" --trim none --sep '' -- a '' b ''
+expect_die_output  'sep-empty/expose-letter-tail'           '__NOSTDIN__' $'ab\n'    -- "${DIE_BIN}" --trim none --sep '' -- a b '' '' ''
+expect_die_output  'sep-empty/expose-letter-mid-empty'      '__NOSTDIN__' $'ab\n'    -- "${DIE_BIN}" --trim none --sep '' -- a '' b ''
 
 # \n-tail of the last non-empty ARG is exposed → no append.
-raw_byte_check  'sep-empty/expose-lf-tail'               '__NOSTDIN__' $'ab\n'    -- "${DIE_BIN}" --trim none --sep '' -- a $'b\n' '' ''
-raw_byte_check  'sep-empty/expose-lf-tail-first-arg'     '__NOSTDIN__' $'a\n'     -- "${DIE_BIN}" --trim none --sep '' -- $'a\n' '' '' ''
+expect_die_output  'sep-empty/expose-lf-tail'               '__NOSTDIN__' $'ab\n'    -- "${DIE_BIN}" --trim none --sep '' -- a $'b\n' '' ''
+expect_die_output  'sep-empty/expose-lf-tail-first-arg'     '__NOSTDIN__' $'a\n'     -- "${DIE_BIN}" --trim none --sep '' -- $'a\n' '' '' ''
 
 # \r-tail of the last non-empty ARG is exposed → append \n → "...\r\n".
-raw_byte_check  'sep-empty/expose-cr-tail'               '__NOSTDIN__' $'a\r\n'   -- "${DIE_BIN}" --trim none --sep '' -- $'a\r' ''
+expect_die_output  'sep-empty/expose-cr-tail'               '__NOSTDIN__' $'a\r\n'   -- "${DIE_BIN}" --trim none --sep '' -- $'a\r' ''
 
 # ---- Non-empty sep + trailing empty ARG: sep's last byte is exposed ----
 # Spec contour: when the last ARG is empty (and ARGs >= 2), the joined
@@ -508,28 +508,85 @@ raw_byte_check  'sep-empty/expose-cr-tail'               '__NOSTDIN__' $'a\r\n' 
 # sep's last byte, NOT the last ARG's content.
 
 # sep = "\r" → joined ends with \r → not \n → append \n → "...\r\n"
-raw_byte_check  'sep-cr/last-empty-cr-exposed'           '__NOSTDIN__' $'a\r\n'   -- "${DIE_BIN}" --trim none --sep $'\r' -- a ''
+expect_die_output  'sep-cr/last-empty-cr-exposed'           '__NOSTDIN__' $'a\r\n'   -- "${DIE_BIN}" --trim none --sep $'\r' -- a ''
 # sep = "\n" → joined ends with \n → no append
-raw_byte_check  'sep-lf/last-empty-lf-exposed'           '__NOSTDIN__' $'a\n'     -- "${DIE_BIN}" --trim none --sep $'\n' -- a ''
+expect_die_output  'sep-lf/last-empty-lf-exposed'           '__NOSTDIN__' $'a\n'     -- "${DIE_BIN}" --trim none --sep $'\n' -- a ''
 # sep = "XYZ" → joined ends with Z → not \n → append
-raw_byte_check  'sep-multichar/last-empty-Z-exposed'     '__NOSTDIN__' $'aXYZ\n'  -- "${DIE_BIN}" --trim none --sep 'XYZ' -- a ''
+expect_die_output  'sep-multichar/last-empty-Z-exposed'     '__NOSTDIN__' $'aXYZ\n'  -- "${DIE_BIN}" --trim none --sep 'XYZ' -- a ''
 
 # Two empty trailing ARGs duplicate the sep at the tail.
 # sep = "\r" twice → "\r\r" → not \n → append → "\r\r\n"
-raw_byte_check  'sep-cr/two-empty-trailing'              '__NOSTDIN__' $'a\r\r\n' -- "${DIE_BIN}" --trim none --sep $'\r' -- a '' ''
+expect_die_output  'sep-cr/two-empty-trailing'              '__NOSTDIN__' $'a\r\r\n' -- "${DIE_BIN}" --trim none --sep $'\r' -- a '' ''
 # sep = "\n" twice → "\n\n" → ends in \n → no append (empty line preserved
 # in the spirit of DR-0002).
-raw_byte_check  'sep-lf/two-empty-trailing'              '__NOSTDIN__' $'a\n\n'   -- "${DIE_BIN}" --trim none --sep $'\n' -- a '' ''
+expect_die_output  'sep-lf/two-empty-trailing'              '__NOSTDIN__' $'a\n\n'   -- "${DIE_BIN}" --trim none --sep $'\n' -- a '' ''
 
 # All-empty ARGs with non-empty sep: the sep appears between adjacent empties.
 # Two empties → one sep slot in the middle → just the sep.
-raw_byte_check  'sep-X/two-empty-args'                   '__NOSTDIN__' $'X\n'     -- "${DIE_BIN}" --trim none --sep 'X' -- '' ''
+expect_die_output  'sep-X/two-empty-args'                   '__NOSTDIN__' $'X\n'     -- "${DIE_BIN}" --trim none --sep 'X' -- '' ''
 # Single empty ARG → no sep slot (no neighbour) → empty joined → just \n.
-raw_byte_check  'sep-X/one-empty-arg'                    '__NOSTDIN__' $'\n'      -- "${DIE_BIN}" --trim none --sep 'X' -- ''
+expect_die_output  'sep-X/one-empty-arg'                    '__NOSTDIN__' $'\n'      -- "${DIE_BIN}" --trim none --sep 'X' -- ''
 
 # -n suppresses the append even when sep alone is exposed.
 raw_byte_check  '-n/sep-cr/last-empty-no-append'         '__NOSTDIN__' $'a\r'     -- "${DIE_BIN}" -n --trim none --sep $'\r' -- a ''
 raw_byte_check  '-n/sep-lf/last-empty-already-lf'        '__NOSTDIN__' $'a\n'     -- "${DIE_BIN}" -n --trim none --sep $'\n' -- a ''
+
+# ---- trim each + whitespace-only ARG = effectively empty ----
+# Spec contour: --trim each strips ASCII whitespace around each ARG. A
+# whitespace-only ARG (e.g. '   ', '\t', '\n\v\f\r ') trims to ''. So with
+# --trim each (the default), even a non-empty ARG list can effectively
+# leave the joined string ending with the separator — same as the
+# trim-none + empty-last-ARG case above.
+
+# trim each + whitespace-only last ARG → effectively empty → sep tail exposed
+expect_die_output  'trim-each/sep-cr/whitespace-last'       '__NOSTDIN__' $'a\r\n'   -- "${DIE_BIN}" --trim each --sep $'\r' -- a '   '
+expect_die_output  'trim-each/sep-lf/whitespace-last'       '__NOSTDIN__' $'a\n'     -- "${DIE_BIN}" --trim each --sep $'\n' -- a $'\t'
+expect_die_output  'trim-each/sep-cr/single-space-last'     '__NOSTDIN__' $'a\r\n'   -- "${DIE_BIN}" --trim each --sep $'\r' -- a ' '
+expect_die_output  'trim-each/sep-multichar/whitespace-last' '__NOSTDIN__' $'aXYZ\n' -- "${DIE_BIN}" --trim each --sep 'XYZ' -- a '   '
+
+# All-whitespace ARGs with --trim each → all become empty → joined is just
+# the separators between them.
+expect_die_output  'trim-each/sep-cr/all-whitespace'        '__NOSTDIN__' $'\r\n'    -- "${DIE_BIN}" --trim each --sep $'\r' -- '   ' '   '
+expect_die_output  'trim-each/sep-lf/all-whitespace'        '__NOSTDIN__' $'\n'      -- "${DIE_BIN}" --trim each --sep $'\n' -- '   ' '   '
+expect_die_output  'trim-each/sep-X/all-whitespace'         '__NOSTDIN__' $'X\n'     -- "${DIE_BIN}" --trim each --sep 'X' -- '   ' '   '
+
+# -n + trim each + whitespace-last → sep tail exposed, no append
+raw_byte_check  '-n/trim-each/sep-cr/whitespace-last'    '__NOSTDIN__' $'a\r'     -- "${DIE_BIN}" -n --trim each --sep $'\r' -- a '   '
+raw_byte_check  '-n/trim-each/sep-lf/whitespace-last'    '__NOSTDIN__' $'a\n'     -- "${DIE_BIN}" -n --trim each --sep $'\n' -- a $'\t'
+
+# ---- sep is an arbitrary byte sequence: multi-char and multi-byte (non-ASCII) ----
+# Spec contour: --sep takes an arbitrary byte sequence (no length or charset
+# restriction). The append decision only cares about the joined string's
+# LAST BYTE, so for a multi-byte sep what matters is the trailing byte of
+# the sep — which for any well-formed UTF-8 non-ASCII char is a
+# continuation byte (0x80-0xBF), never \n or \r, so append always fires.
+
+# Multi-char ASCII sep, normal join.
+# Other multi-char patterns (`<br>`, `, `, `\n\t`, `\033[0m`, etc.) are
+# all the same semantic class — an arbitrary byte sequence between ARGs —
+# so they don't need separate cases; the join logic doesn't inspect the
+# sep's content beyond its last byte (covered by sep-*/last-empty-*).
+expect_die_output  'sep-multichar/comma-space'              '__NOSTDIN__' $'a, b, c\n' -- "${DIE_BIN}" --trim none --sep ', ' -- a b c
+expect_die_output  'sep-multichar/double-space'             '__NOSTDIN__' $'a  b\n'    -- "${DIE_BIN}" --trim none --sep '  ' -- a b
+expect_die_output  'sep-multichar/long-string'              '__NOSTDIN__' $'a<<-->>b\n' -- "${DIE_BIN}" --trim none --sep '<<-->>' -- a b
+
+# Multi-byte UTF-8 sep (zenkaku / hiragana / emoji): last byte is a
+# continuation byte, never \n, so append fires unconditionally.
+expect_die_output  'sep-zenkaku-comma'                      '__NOSTDIN__' $'a\xe3\x80\x81b\n'  -- "${DIE_BIN}" --trim none --sep $'\xe3\x80\x81' -- a b
+expect_die_output  'sep-hiragana'                           '__NOSTDIN__' $'a\xe3\x81\x82b\n'  -- "${DIE_BIN}" --trim none --sep $'\xe3\x81\x82' -- a b
+expect_die_output  'sep-emoji-beer'                         '__NOSTDIN__' $'a\xf0\x9f\x8d\xbab\n' -- "${DIE_BIN}" --trim none --sep $'\xf0\x9f\x8d\xba' -- a b
+
+# Multi-byte sep + trim-each + whitespace-last → sep tail (continuation
+# byte) exposed → not \n → append.
+expect_die_output  'sep-hiragana/trim-each/ws-last'         '__NOSTDIN__' $'a\xe3\x81\x82\n' -- "${DIE_BIN}" --trim each --sep $'\xe3\x81\x82' -- a '   '
+
+# sep with embedded \n in the middle vs at the end
+# - sep "X\n" → last byte \n → no append (joined ends with \n)
+# - sep "\nX" → last byte X → append
+expect_die_output  'sep-trailing-lf'                        '__NOSTDIN__' $'aX\nb\n'  -- "${DIE_BIN}" --trim none --sep $'X\n' -- a b
+expect_die_output  'sep-trailing-lf/last-empty-no-append'   '__NOSTDIN__' $'aX\n'     -- "${DIE_BIN}" --trim none --sep $'X\n' -- a ''
+expect_die_output  'sep-leading-lf'                         '__NOSTDIN__' $'a\nXb\n'  -- "${DIE_BIN}" --trim none --sep $'\nX' -- a b
+expect_die_output  'sep-leading-lf/last-empty-append'       '__NOSTDIN__' $'a\nX\n'   -- "${DIE_BIN}" --trim none --sep $'\nX' -- a ''
 
 # ---------- error / usage ----------
 # Error message text is implementation-detail. We only assert: exit=1, stdout
@@ -578,17 +635,17 @@ soft_err_check 'help-when-no-args'      "${DIE_BIN}"
 # matter — they all parse independently into separate flags.
 
 # --sep accepts the --sep=VALUE form (long-with-equals).
-raw_byte_check  'sep-equals-form'                 '__NOSTDIN__' $'a,b,c\n'   -- "${DIE_BIN}" --sep=',' -- a b c
+expect_die_output  'sep-equals-form'                 '__NOSTDIN__' $'a,b,c\n'   -- "${DIE_BIN}" --sep=',' -- a b c
 
 # --sep= (empty value) is a valid empty separator, not an error.
-raw_byte_check  'sep-equals-empty-value'          '__NOSTDIN__' $'abc\n'     -- "${DIE_BIN}" --sep= -- a b c
+expect_die_output  'sep-equals-empty-value'          '__NOSTDIN__' $'abc\n'     -- "${DIE_BIN}" --sep= -- a b c
 
 # --trim=VALUE accepts the long-with-equals form too.
-raw_byte_check  'trim-equals-valid-value'         '__NOSTDIN__' $'foo bar\n' -- "${DIE_BIN}" --trim=each -- ' foo ' ' bar '
+expect_die_output  'trim-equals-valid-value'         '__NOSTDIN__' $'foo bar\n' -- "${DIE_BIN}" --trim=each -- ' foo ' ' bar '
 
 # Duplicate options: last wins (NOT an error).
-raw_byte_check  'duplicate-sep-last-wins'         '__NOSTDIN__' $'a;b\n'     -- "${DIE_BIN}" --sep ',' --sep ';' -- a b
-raw_byte_check  'duplicate-trim-last-wins'        '__NOSTDIN__' $' foo bar \n' -- "${DIE_BIN}" --trim each --trim none -- ' foo ' ' bar '
+expect_die_output  'duplicate-sep-last-wins'         '__NOSTDIN__' $'a;b\n'     -- "${DIE_BIN}" --sep ',' --sep ';' -- a b
+expect_die_output  'duplicate-trim-last-wins'        '__NOSTDIN__' $' foo bar \n' -- "${DIE_BIN}" --trim each --trim none -- ' foo ' ' bar '
 
 # Option order before `--` is irrelevant.
 raw_byte_check  'option-order/-n-then-sep'        '__NOSTDIN__' 'a,b'        -- "${DIE_BIN}" -n --sep ',' -- a b
