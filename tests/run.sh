@@ -465,9 +465,21 @@ expect_die_output  'boundary/dash-dash-zero-arg-no-stdin'  '__NOSTDIN__' $'\n'  
 expect_die_output  'boundary/no-dash-dash-stdin-forwards'  'X'             $'X\n'   -- "${DIE_BIN}"
 
 # No `--` + stdin /dev/null (TTY-less, empty input) → stdin path, empty
-# input becomes a single \n. Spec note: a real TTY would emit help instead;
-# the shell harness cannot distinguish a real TTY here.
-expect_die_output  'boundary/no-dash-dash-empty-stdin'     '__NOSTDIN__' $'\n'      -- "${DIE_BIN}"
+# input becomes a single \n on POSIX. Spec note: a real TTY would emit help
+# instead; the shell harness cannot distinguish a real TTY here.
+#
+# On Windows, `/dev/null` (= NUL device) is reported by _isatty() as a
+# character device, so die falls into the help path instead — that's an OS
+# semantic difference, not a die spec violation. Skip the case on Windows
+# bash (Git Bash) rather than papering over it.
+case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+        printf '  SKIP  boundary/no-dash-dash-empty-stdin  (Windows NUL is reported as a char device → help path)\n'
+        ;;
+    *)
+        expect_die_output  'boundary/no-dash-dash-empty-stdin'     '__NOSTDIN__' $'\n'      -- "${DIE_BIN}"
+        ;;
+esac
 
 # `die -n --` (zero ARG + -n) → ARG path empty, -n suppresses append → "".
 raw_byte_check  'boundary/-n-dash-dash-zero-arg-empty'  '__NOSTDIN__' ''         -- "${DIE_BIN}" -n --
